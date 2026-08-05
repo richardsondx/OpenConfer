@@ -106,7 +106,7 @@ async function api(path: string, options: RequestInit = {}): Promise<Record<stri
   return body;
 }
 
-program.name("openconfer").description("OpenConfer — human decision infrastructure for AI agents").version("0.2.0");
+program.name("openconfer").description("OpenConfer — human decision infrastructure for AI agents").version("0.2.1");
 
 program
   .command("init")

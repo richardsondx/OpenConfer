@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenConfer"
+  short_description: "Ask a human and resume with a structured answer"
+  default_prompt: "Use $openconfer when you need my decision before continuing."

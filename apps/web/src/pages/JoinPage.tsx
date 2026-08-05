@@ -5,7 +5,7 @@ import { IncomingBrief } from "../components/IncomingBrief";
 import { HumanSessionShell } from "../components/layouts";
 import { Badge, Button } from "../components/primitives";
 import { SessionRecap } from "../components/SessionRecap";
-import type { UnderstoodDecision } from "../lib/decision-signal";
+import type { DecisionSignal, UnderstoodDecision } from "../lib/decision-signal";
 import { sessionOutcome } from "../lib/session-outcome";
 import type { RoomCredentials } from "../components/VoiceSession";
 import { DEFAULT_ALERT_PREFS, normalizeAlertPrefs } from "../lib/alert-prefs";
@@ -189,6 +189,7 @@ export function JoinPage() {
   const ringHandleRef = useRef<RingHandle | null>(null);
   const rungKeyRef = useRef<string | null>(null);
   const autoJoinAttemptedRef = useRef(false);
+  const submissionIdRef = useRef<string | null>(null);
 
   const loadSession = async (signal?: AbortSignal) => {
     if (!id || !token) throw new Error("This join link is missing its session ID or token.");
@@ -198,6 +199,14 @@ export function JoinPage() {
     }
     const data = await response.json() as JoinResponse;
     setSession(data.session);
+    if (data.session.pending_decision) {
+      setUnderstood({
+        result: data.session.pending_decision.result,
+        summary: data.session.pending_decision.summary,
+        captured_context: data.session.pending_decision.captured_context,
+        revision: data.session.pending_decision.revision,
+      });
+    }
     setAcknowledged(Boolean(data.acknowledged));
     setMode((current) => {
       const next = resolveModeAfterLoad(data.session.status);
@@ -387,14 +396,14 @@ export function JoinPage() {
     );
   };
 
-  const handleDecisionSignal = (
-    signal:
-      | { kind: "preview"; result: Record<string, unknown>; summary?: string }
-      | { kind: "ok"; result?: Record<string, unknown>; summary?: string }
-      | { kind: "failed"; error?: string },
-  ) => {
+  const handleDecisionSignal = (signal: DecisionSignal) => {
     if (signal.kind === "preview") {
-      setUnderstood({ result: signal.result, summary: signal.summary });
+      setUnderstood((current) => ({
+        result: signal.result ?? current?.result,
+        summary: signal.summary ?? current?.summary,
+        captured_context: signal.captured_context ?? current?.captured_context,
+        revision: signal.revision ?? current?.revision,
+      }));
       setSubmitIssue(null);
       return;
     }
@@ -415,10 +424,17 @@ export function JoinPage() {
     setConfirming(true);
     setError(null);
     try {
+      submissionIdRef.current ??= crypto.randomUUID();
       const response = await fetch(`/v1/sessions/${encodeURIComponent(id)}/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Join-Token": token },
-        body: JSON.stringify({ result, summary, method: mode === "text" ? "text_form" : "session_ui" }),
+        body: JSON.stringify({
+          result,
+          summary,
+          captured_context: understood?.captured_context,
+          method: mode === "text" ? "text_form" : "session_ui",
+          submission_id: submissionIdRef.current,
+        }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { error?: string };
@@ -428,10 +444,51 @@ export function JoinPage() {
       setCredentials(undefined);
       await loadSession();
       setMode("done");
+      submissionIdRef.current = null;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Confirmation failed.");
     } finally {
       setConfirming(false);
+    }
+  };
+
+  const handleCallAgain = async () => {
+    if (!id || !token) return;
+    setActionBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/v1/sessions/${encodeURIComponent(id)}/phone/call`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Join-Token": token },
+        body: "{}",
+      });
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Could not start another call.");
+      await loadSession();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not start another call.");
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleStopCallbacks = async () => {
+    if (!id || !token) return;
+    setActionBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/v1/sessions/${encodeURIComponent(id)}/phone/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Join-Token": token },
+        body: "{}",
+      });
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Could not stop callbacks.");
+      await loadSession();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not stop callbacks.");
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -569,6 +626,45 @@ export function JoinPage() {
             {isBriefStale(session.expires_at)
               ? "This brief has expired. Refresh to confirm whether the session is still open."
               : "This brief is nearing expiry. Join soon or the session may close."}
+          </div>
+        )}
+        {session.pending_decision && (
+          <div className="alert alert-info" role="status">
+            <strong>Previous call interrupted.</strong>{" "}
+            The last understood decision is preserved and will be read back for confirmation. It has not been submitted.
+          </div>
+        )}
+        {session.phone_retry && session.phone_retry.state !== "idle" && (
+          <div className="alert alert-info phone-retry-recovery" role="status">
+            <div>
+              <strong>
+                {session.phone_retry.state === "scheduled"
+                  ? "Another phone call is scheduled"
+                  : session.phone_retry.state === "dialing" || session.phone_retry.state === "in_call"
+                    ? "Phone call in progress"
+                    : session.phone_retry.state === "stopped"
+                      ? "Automatic calls stopped"
+                      : session.phone_retry.state === "blocked"
+                        ? "Phone setup needs attention"
+                        : "No more automatic calls"}
+              </strong>
+              <p>
+                {session.phone_retry.next_retry_at
+                  ? `Next callback: ${new Date(session.phone_retry.next_retry_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. `
+                  : "This session is still waiting. "}
+                {session.phone_retry.automatic_callbacks_used} of {session.phone_retry.max_automatic_callbacks} automatic callbacks used.
+              </p>
+            </div>
+            <div className="incoming-secondary">
+              <Button variant="secondary" onClick={() => void handleCallAgain()} disabled={actionBusy || session.phone_retry.state === "dialing" || session.phone_retry.state === "in_call"}>
+                Call again now
+              </Button>
+              {!session.phone_retry.automatic_stopped && session.phone_retry.state !== "exhausted" && (
+                <Button variant="ghost" onClick={() => void handleStopCallbacks()} disabled={actionBusy}>
+                  Stop automatic callbacks
+                </Button>
+              )}
+            </div>
           </div>
         )}
         <IncomingBrief

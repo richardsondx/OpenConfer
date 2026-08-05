@@ -76,6 +76,7 @@ describe("LiveKit adapter dispatch", () => {
     const metadata = JSON.parse(createRoom.mock.calls[0]![0].metadata);
     expect(metadata.operator.preferredName).toBe("Richardson");
     expect(metadata.locale).toBe("it-IT");
+    expect(metadata.surface).toBe("browser");
   });
 
   it("still returns room credentials when createRoom fails", async () => {
@@ -94,6 +95,41 @@ describe("LiveKit adapter dispatch", () => {
     expect(room.url).toBe("wss://livekit.example");
   });
 
+  it("creates a fresh named room and passes an unconfirmed preview to the voice agent", async () => {
+    const adapter = createLiveKitAdapter({
+      url: "wss://livekit.example",
+      apiUrl: "https://livekit.example",
+      apiKey: "key",
+      apiSecret: "secret",
+      agentName: "openconfer-voice",
+      mock: false,
+    });
+    const roomName = "confer-ses_dispatch-call-2";
+    createRoom.mockResolvedValue({ name: roomName });
+    const room = await adapter.createRoom(
+      {
+        ...session,
+        pendingDecision: {
+          result: { approved: true },
+          summary: "Approve",
+          revision: 3,
+          previewedAt: "2026-08-05T12:00:00.000Z",
+        },
+      },
+      { roomName, surface: "phone" },
+    );
+
+    expect(room.roomName).toBe(roomName);
+    expect(createRoom).toHaveBeenCalledWith(expect.objectContaining({ name: roomName }));
+    const metadata = JSON.parse(createRoom.mock.calls[0]![0].metadata);
+    expect(metadata.pendingDecision).toMatchObject({
+      result: { approved: true },
+      summary: "Approve",
+      revision: 3,
+    });
+    expect(metadata.surface).toBe("phone");
+  });
+
   it("deletes the room on endRoom", async () => {
     deleteRoom.mockResolvedValue({});
     const adapter = createLiveKitAdapter({
@@ -105,5 +141,7 @@ describe("LiveKit adapter dispatch", () => {
     });
     await adapter.endRoom("ses_dispatch");
     expect(deleteRoom).toHaveBeenCalledWith("confer-ses_dispatch");
+    await adapter.endRoom("confer-ses_dispatch-call-2");
+    expect(deleteRoom).toHaveBeenLastCalledWith("confer-ses_dispatch-call-2");
   });
 });

@@ -105,6 +105,58 @@ export interface SessionCallback {
   secret?: string;
 }
 
+export type PhoneRetryPolicy = "never" | "brief" | "persistent";
+
+export type PhoneRetryState =
+  | "idle"
+  | "scheduled"
+  | "dialing"
+  | "in_call"
+  | "exhausted"
+  | "stopped"
+  | "blocked";
+
+export interface PendingDecision {
+  result: Record<string, unknown>;
+  summary?: string;
+  capturedContext?: CapturedContext;
+  revision: number;
+  previewedAt: string;
+}
+
+export interface PhoneRetrySnapshot {
+  policy: PhoneRetryPolicy;
+  state: PhoneRetryState;
+  attemptCount: number;
+  automaticCallbacksUsed: number;
+  automaticStopped: boolean;
+  retryOriginAt?: string;
+  deadlineAt?: string;
+  nextRetryAt?: string;
+  lastOutcome?: string;
+  blockedReason?: string;
+}
+
+export interface CapturedContext {
+  /** Preferences or constraints that shape the originating work. */
+  steering: string[];
+  /** Explicit instructions for the originating run that are separate from the decision result. */
+  additional_instructions: string[];
+  /** Distinct follow-up work that must not silently expand the current task. */
+  new_requests: string[];
+  /** Useful topics heard during the call that remain unresolved. */
+  unresolved_topics: string[];
+}
+
+export function emptyCapturedContext(): CapturedContext {
+  return {
+    steering: [],
+    additional_instructions: [],
+    new_requests: [],
+    unresolved_topics: [],
+  };
+}
+
 export interface ConferSession {
   id: string;
   type: SessionType;
@@ -130,9 +182,13 @@ export interface ConferSession {
   joinUrl?: string;
   result?: Record<string, unknown>;
   summary?: string;
+  capturedContext?: CapturedContext;
+  pendingDecision?: PendingDecision;
+  phoneRetry?: PhoneRetrySnapshot;
   humanConfirmation?: {
     confirmedAt: string;
     method: "session_ui" | "text_form" | "voice_agent";
+    submissionId?: string;
   };
   createdAt: string;
   updatedAt: string;

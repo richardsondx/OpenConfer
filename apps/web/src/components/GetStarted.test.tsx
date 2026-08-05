@@ -16,7 +16,7 @@ function settings(voiceReady: boolean): SettingsView {
       openai_api_key_configured: voiceReady,
       realtime: {
         provider: "openai",
-        model: "gpt-realtime",
+        model: "gpt-realtime-2.1",
         voice: "marin",
         api_key_configured: voiceReady,
       },

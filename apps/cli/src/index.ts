@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { DEFAULT_REALTIME_MODEL } from "@openconfer/schemas";
 import { readSessionCreateInput } from "./session-input.js";
 
 const program = new Command();
@@ -105,7 +106,7 @@ async function api(path: string, options: RequestInit = {}): Promise<Record<stri
   return body;
 }
 
-program.name("openconfer").description("OpenConfer — human decision infrastructure for AI agents").version("0.1.0");
+program.name("openconfer").description("OpenConfer — human decision infrastructure for AI agents").version("0.2.0");
 
 program
   .command("init")
@@ -151,12 +152,18 @@ storage:
 
 conversation:
   adapter: livekit
-  model: gpt-realtime
+  speaking_mode: realtime
+  preset: live
+  model: ${DEFAULT_REALTIME_MODEL}
   voice: marin
   livekit_url: ws://127.0.0.1:7880
   livekit_public_url: ws://127.0.0.1:7880
   livekit_api_key: devkey
   livekit_api_secret: secret
+  realtime:
+    provider: openai
+    model: ${DEFAULT_REALTIME_MODEL}
+    voice: marin
 
 routes:
   default:

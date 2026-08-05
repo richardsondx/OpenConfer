@@ -365,7 +365,11 @@ export function VoiceSession({
       </div>
       {understood && (
         <VoiceUnderstoodPreview
-          key={JSON.stringify(understood.result) + (understood.summary ?? "")}
+          key={
+            JSON.stringify(understood.result) +
+            (understood.summary ?? "") +
+            JSON.stringify(understood.captured_context ?? {})
+          }
           understood={understood}
           sessionType={sessionType}
           options={options}

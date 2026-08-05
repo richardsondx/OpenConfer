@@ -61,6 +61,10 @@ async function responseError(response: Response): Promise<string> {
   return typeof body.message === "string" ? body.message : `Twilio returned HTTP ${response.status}`;
 }
 
+function retryableStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
 export function createTwilioTelephonyAdapter(
   config: TwilioTelephonyConfig,
   dependencies: TwilioTelephonyDependencies = {},
@@ -102,8 +106,10 @@ export function createTwilioTelephonyAdapter(
           To: config.destinationNumber!,
           From: config.fromNumber!,
           Url: twimlUrl(connected.connectUrl),
+          MachineDetection: "Enable",
         });
-        const response = await (dependencies.fetch ?? fetch)(
+        const request = dependencies.fetch ?? fetch;
+        const response = await request(
           `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid!)}/Calls.json`,
           {
             method: "POST",
@@ -114,7 +120,14 @@ export function createTwilioTelephonyAdapter(
             body,
           },
         );
-        if (!response.ok) throw new Error(await responseError(response));
+        if (!response.ok) {
+          return {
+            success: false,
+            channel: "twilio",
+            error: await responseError(response),
+            retryable: retryableStatus(response.status),
+          };
+        }
         const created = (await response.json()) as { sid?: string; status?: string };
         return {
           success: true,
@@ -144,10 +157,11 @@ export function createTwilioTelephonyAdapter(
           },
         );
         if (!response.ok) throw new Error(await responseError(response));
-        const call = (await response.json()) as { status?: unknown };
+        const call = (await response.json()) as { status?: unknown; answered_by?: unknown };
         return {
           success: true,
           status: typeof call.status === "string" ? call.status : "unknown",
+          answeredBy: typeof call.answered_by === "string" ? call.answered_by : undefined,
         };
       } catch (error) {
         return {
@@ -161,7 +175,8 @@ export function createTwilioTelephonyAdapter(
         return { success: false, error: "Twilio credentials are not configured" };
       }
       try {
-        const response = await (dependencies.fetch ?? fetch)(
+        const request = dependencies.fetch ?? fetch;
+        let response = await request(
           `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}/Calls/${encodeURIComponent(callId)}.json`,
           {
             method: "POST",
@@ -172,6 +187,21 @@ export function createTwilioTelephonyAdapter(
             body: new URLSearchParams({ Status: "canceled" }),
           },
         );
+        // Twilio accepts `canceled` before connection and `completed` for an
+        // in-progress call. Retry with the latter to guarantee teardown.
+        if (response.status === 400) {
+          response = await request(
+            `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}/Calls/${encodeURIComponent(callId)}.json`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Basic ${Buffer.from(`${config.accountSid}:${config.authToken}`).toString("base64")}`,
+                "Content-Type": "application/x-www-form-urlencoded",
+              },
+              body: new URLSearchParams({ Status: "completed" }),
+            },
+          );
+        }
         if (!response.ok) throw new Error(await responseError(response));
         return { success: true };
       } catch (error) {

@@ -27,9 +27,9 @@ function baseConfig(overrides: Partial<OpenConferConfig["conversation"]> = {}): 
       adapter: "livekit",
       speaking_mode: "realtime",
       preset: "live",
-      model: "gpt-realtime",
+      model: "gpt-realtime-2.1",
       voice: "marin",
-      realtime: { provider: "openai", model: "gpt-realtime", voice: "marin" },
+      realtime: { provider: "openai", model: "gpt-realtime-2.1", voice: "marin" },
       stt: { provider: "deepgram", model: "nova-3" },
       llm: { provider: "openrouter", model: "openai/gpt-4o-mini", base_url: "https://openrouter.ai/api/v1" },
       tts: {
@@ -88,7 +88,7 @@ describe("voice settings status", () => {
 
   it("flags restart when OpenAI voice settings change", () => {
     const { restartRequired } = applySettingsPatch(baseConfig(), {
-      conversation: { openai_api_key: "sk-new", model: "gpt-realtime", voice: "marin" },
+      conversation: { openai_api_key: "sk-new", model: "gpt-realtime-2.1", voice: "marin" },
     });
     expect(restartRequired).toBe(true);
   });
@@ -172,6 +172,7 @@ describe("voice settings status", () => {
             sound: false,
             browser_notifications: true,
             snooze_minutes: 15,
+            phone_retry_policy: "persistent",
           },
         },
       },
@@ -182,6 +183,7 @@ describe("voice settings status", () => {
     expect(config.operators.me?.alerts?.style).toBe("standard");
     expect(config.operators.me?.alerts?.sound).toBe(false);
     expect(config.operators.me?.alerts?.snooze_minutes).toBe(15);
+    expect(config.operators.me?.alerts?.phone_retry_policy).toBe("persistent");
   });
 
   it("detects local serve LiveKit defaults vs custom Cloud credentials", () => {
@@ -220,6 +222,11 @@ describe("Hermes skill preview", () => {
     expect(skill).toContain('"continuation": {');
     expect(skill).toContain('"idempotency_key": "${idempotency_key}"');
     expect(skill).toContain("Keep the returned ID in agent task state, not a file");
+    expect(skill).toContain("Apply `result` only to the original blocked objective");
+    expect(skill).toContain("captured_context.steering");
+    expect(skill).toContain("Do not silently execute `new_requests`");
+    expect(skill).toContain("Preserve `unresolved_topics`");
+    expect(skill).toContain("Acknowledge only after consuming both `result`");
     expect(skill).toContain("declined");
     expect(skill).toContain("policy_blocked");
     expect(skill).not.toMatch(/cat >|session_file|state_dir|session create --file/);

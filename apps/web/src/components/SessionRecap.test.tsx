@@ -24,6 +24,12 @@ describe("SessionRecap", () => {
           },
           initiator: { agent_id: "research-bot", harness: "openclaw" },
           result: { selected_option: "soft" },
+          captured_context: {
+            steering: ["Require passkeys"],
+            additional_instructions: ["Update the runbook"],
+            new_requests: ["Audit mobile login next"],
+            unresolved_topics: ["Recovery codes"],
+          },
         }}
       />,
     );
@@ -36,6 +42,10 @@ describe("SessionRecap", () => {
     expect(screen.getByText(/soft launch to existing users/i)).toBeInTheDocument();
     expect(screen.getByText(/interviewed 8 users/i)).toBeInTheDocument();
     expect(screen.getByText(/competitive analysis/i)).toBeInTheDocument();
+    expect(screen.getByText(/require passkeys/i)).toBeInTheDocument();
+    expect(screen.getByText(/update the runbook/i)).toBeInTheDocument();
+    expect(screen.getByText(/audit mobile login next/i)).toBeInTheDocument();
+    expect(screen.getByText(/recovery codes/i)).toBeInTheDocument();
   });
 
   it("shows standup completed work without inventing options", () => {

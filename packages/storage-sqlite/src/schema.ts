@@ -22,6 +22,9 @@ export const sessions = sqliteTable("sessions", {
   joinUrl: text("join_url"),
   resultJson: text("result_json"),
   summary: text("summary"),
+  capturedContextJson: text("captured_context_json"),
+  pendingDecisionJson: text("pending_decision_json"),
+  phoneRetryJson: text("phone_retry_json"),
   humanConfirmationJson: text("human_confirmation_json"),
   idempotencyKey: text("idempotency_key"),
   requestFingerprint: text("request_fingerprint"),
@@ -69,4 +72,30 @@ export const channelDeliveries = sqliteTable("channel_deliveries", {
   error: text("error"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+});
+
+export const phoneAttempts = sqliteTable("phone_attempts", {
+  id: text("id").primaryKey(),
+  sessionId: text("session_id").notNull(),
+  operatorId: text("operator_id").notNull(),
+  sequence: integer("sequence").notNull(),
+  trigger: text("trigger").notNull(),
+  status: text("status").notNull(),
+  providerCallId: text("provider_call_id"),
+  roomName: text("room_name"),
+  consumesAutomaticSlot: integer("consumes_automatic_slot", { mode: "boolean" }).notNull().default(false),
+  retryable: integer("retryable", { mode: "boolean" }),
+  error: text("error"),
+  scheduledAt: text("scheduled_at"),
+  startedAt: text("started_at"),
+  endedAt: text("ended_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const decisionSubmissions = sqliteTable("decision_submissions", {
+  id: text("id").primaryKey(),
+  sessionId: text("session_id").notNull(),
+  payloadFingerprint: text("payload_fingerprint").notNull(),
+  createdAt: text("created_at").notNull(),
 });

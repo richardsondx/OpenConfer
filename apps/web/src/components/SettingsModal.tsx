@@ -32,6 +32,7 @@ type Section = "connect" | "access" | "alerts" | "preferences" | "voice" | "stat
 
 /** Stand-in when a secret is configured but the API only returns a short preview. */
 const SAVED_SECRET_PREVIEW = "••••••••••••••";
+const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1";
 
 const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: "status", label: "Status" },
@@ -46,8 +47,8 @@ const SECTIONS: Array<{ id: Section; label: string }> = [
 const SPEAKING_PRESETS: Array<{ value: SpeakingPreset; label: string; hint: string }> = [
   {
     value: "live",
-    label: "Live (recommended)",
-    hint: "OpenAI Realtime — best latency. One API key.",
+    label: "OpenAI Realtime (recommended)",
+    hint: "Developer Realtime API — not ChatGPT GPT-Live, which is not API-accessible yet.",
   },
   {
     value: "flexible",
@@ -67,9 +68,7 @@ const SPEAKING_PRESETS: Array<{ value: SpeakingPreset; label: string; hint: stri
 ];
 
 const REALTIME_MODELS = [
-  { value: "gpt-realtime", label: "gpt-realtime (recommended)" },
-  { value: "gpt-realtime-mini", label: "gpt-realtime-mini" },
-  { value: "gpt-realtime-2.1", label: "gpt-realtime-2.1" },
+  { value: "gpt-realtime-2.1", label: "gpt-realtime-2.1 (recommended)" },
   { value: "gpt-realtime-2.1-mini", label: "gpt-realtime-2.1-mini" },
 ] as const;
 
@@ -195,6 +194,7 @@ export function SettingsModal({
   const [alertSound, setAlertSound] = useState(true);
   const [browserNotifications, setBrowserNotifications] = useState(false);
   const [snoozeMinutes, setSnoozeMinutes] = useState(3);
+  const [phoneRetryPolicy, setPhoneRetryPolicy] = useState<"never" | "brief" | "persistent">("brief");
   const [callName, setCallName] = useState("");
   const [quietEnabled, setQuietEnabled] = useState(false);
   const [quietFrom, setQuietFrom] = useState("22:00");
@@ -207,7 +207,7 @@ export function SettingsModal({
   const [livekitSecret, setLivekitSecret] = useState("");
   const [preset, setPreset] = useState<SpeakingPreset>("live");
   const [openaiKey, setOpenaiKey] = useState("");
-  const [realtimeModel, setRealtimeModel] = useState("gpt-realtime");
+  const [realtimeModel, setRealtimeModel] = useState(DEFAULT_REALTIME_MODEL);
   const [realtimeVoice, setRealtimeVoice] = useState("marin");
   const [sttProvider, setSttProvider] = useState("deepgram");
   const [sttModel, setSttModel] = useState("nova-3");
@@ -223,7 +223,9 @@ export function SettingsModal({
 
   const hydrateSpeaking = (view: SettingsView) => {
     setPreset(view.conversation.preset ?? "live");
-    setRealtimeModel(view.conversation.realtime?.model || view.conversation.model || "gpt-realtime");
+    setRealtimeModel(
+      view.conversation.realtime?.model || view.conversation.model || DEFAULT_REALTIME_MODEL,
+    );
     setRealtimeVoice(view.conversation.realtime?.voice || view.conversation.voice || "marin");
     setSttProvider(view.conversation.stt?.provider || "deepgram");
     setSttModel(view.conversation.stt?.model || "nova-3");
@@ -261,6 +263,7 @@ export function SettingsModal({
         setAlertSound(view.operator?.alerts?.sound !== false);
         setBrowserNotifications(view.operator?.alerts?.browser_notifications === true);
         setSnoozeMinutes(view.operator?.alerts?.snooze_minutes ?? 3);
+        setPhoneRetryPolicy(view.operator?.alerts?.phone_retry_policy ?? "brief");
         setCallName(view.operator?.call_name ?? "");
         {
           const range = parseQuietHours(view.operator?.quiet_hours);
@@ -416,6 +419,7 @@ export function SettingsModal({
               sound: alertSound,
               browser_notifications: browserNotifications,
               snooze_minutes: snoozeMinutes as 1 | 3 | 5 | 10 | 15 | 30,
+              phone_retry_policy: phoneRetryPolicy,
             },
           },
         },
@@ -444,7 +448,7 @@ export function SettingsModal({
 
       // Always allow updating realtime credentials (Live preset + Custom realtime path).
       conversation.realtime = {
-        model: realtimeModel.trim() || "gpt-realtime",
+        model: realtimeModel.trim() || DEFAULT_REALTIME_MODEL,
         voice: realtimeVoice.trim() || "marin",
         ...(openaiKey.trim() ? { api_key: openaiKey.trim() } : {}),
       };
@@ -560,7 +564,9 @@ export function SettingsModal({
     settings &&
       (preset !== savedPreset ||
         realtimeModel !==
-          (settings.conversation.realtime?.model || settings.conversation.model || "gpt-realtime") ||
+          (settings.conversation.realtime?.model ||
+            settings.conversation.model ||
+            DEFAULT_REALTIME_MODEL) ||
         realtimeVoice !==
           (settings.conversation.realtime?.voice || settings.conversation.voice || "marin") ||
         (preset !== "live" &&
@@ -933,6 +939,23 @@ export function SettingsModal({
                   <small>Opt-in desktop notices, especially useful for high/incident urgency.</small>
                 </span>
               </label>
+              <label className="field-label" htmlFor="phone-retry-policy">
+                If I miss or disconnect a phone call
+              </label>
+              <select
+                id="phone-retry-policy"
+                className="field-input"
+                value={phoneRetryPolicy}
+                onChange={(event) => setPhoneRetryPolicy(event.target.value as "never" | "brief" | "persistent")}
+              >
+                <option value="never">Never call back automatically</option>
+                <option value="brief">Retry briefly — 2 callbacks within 10 minutes (default)</option>
+                <option value="persistent">Keep trying — 5 callbacks within 30 minutes</option>
+              </select>
+              <p className="settings-hint">
+                Applies to new sessions. Calls stop at the selected limit, during quiet hours, or when
+                you stop callbacks for a session. Twilio call charges apply to every attempt.
+              </p>
               <label className="field-label" htmlFor="snooze-minutes">
                 Snooze for
               </label>

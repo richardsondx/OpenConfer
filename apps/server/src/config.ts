@@ -2,7 +2,11 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { ConfigSchema, type OpenConferConfig } from "@openconfer/schemas";
+import {
+  ConfigSchema,
+  DEFAULT_REALTIME_MODEL,
+  type OpenConferConfig,
+} from "@openconfer/schemas";
 import { generateApiToken } from "@openconfer/auth-local";
 
 export function expandPath(path: string): string {
@@ -27,7 +31,7 @@ export function getDefaultConfig(): OpenConferConfig {
     },
     conversation: {
       adapter: "livekit",
-      model: "gpt-realtime",
+      model: DEFAULT_REALTIME_MODEL,
       voice: "marin",
       livekit_url: "ws://127.0.0.1:7880",
       livekit_public_url: "ws://127.0.0.1:7880",
@@ -84,7 +88,7 @@ conversation:
   adapter: livekit
   speaking_mode: realtime
   preset: live
-  model: gpt-realtime
+  model: ${DEFAULT_REALTIME_MODEL}
   voice: marin
   livekit_url: ws://127.0.0.1:7880
   livekit_public_url: ws://127.0.0.1:7880
@@ -92,7 +96,7 @@ conversation:
   livekit_api_secret: secret
   realtime:
     provider: openai
-    model: gpt-realtime
+    model: ${DEFAULT_REALTIME_MODEL}
     voice: marin
 
 telephony:

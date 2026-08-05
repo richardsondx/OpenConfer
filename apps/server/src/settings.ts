@@ -223,14 +223,21 @@ JSON
 
 ## Deterministic lifecycle
 
-Keep the returned ID in agent task state, not a file. Wait, read only after a
-completed status, verify/apply the structured result, and acknowledge only after
-applying it:
+Keep the returned ID in agent task state, not a file. Wait and read only after a
+completed status. Consume the complete response packet before acknowledging it:
+
+- Apply \`result\` only to the original blocked objective.
+- Consider \`captured_context.steering\` and \`additional_instructions\` within your
+  normal authority and the current task scope.
+- Do not silently execute \`new_requests\` as part of the old task; surface or
+  queue them as distinct follow-up work.
+- Preserve \`unresolved_topics\` without inventing answers.
+- Acknowledge only after consuming both \`result\` and every captured-context category.
 
 \`\`\`bash
 openconfer session wait SESSION_ID --json
 openconfer session result SESSION_ID --json
-# Apply the validated result before the next command.
+# Apply the complete validated result + captured_context packet before the next command.
 openconfer session ack SESSION_ID --run-id RUN_ID --json
 \`\`\`
 
@@ -728,7 +735,7 @@ export function applySettingsPatch(
     }
   }
 
-  return { config: next, restartRequired };
+  return { config: ensureSpeakingShape(next), restartRequired };
 }
 
 export function persistConfig(config: OpenConferConfig): void {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ConversationAdapter, TelephonyAdapter } from "@openconfer/adapter-sdk";
 import { createDatabase, SessionStore } from "@openconfer/storage-sqlite";
-import type { OpenConferConfig } from "@openconfer/schemas";
+import { DEFAULT_OPERATOR_ALERTS, type OpenConferConfig } from "@openconfer/schemas";
 import {
   fingerprintCreateInput,
   IdempotencyConflictError,
@@ -128,7 +128,7 @@ describe("SessionService lifecycle and idempotency", () => {
   });
 
   it.each(["busy", "failed", "no-answer", "canceled", "completed"])(
-    "ends a waiting phone session when Twilio reports %s",
+    "keeps a waiting phone session open and schedules a callback when Twilio reports %s",
     async (providerStatus) => {
       const telephony: TelephonyAdapter = {
         name: "twilio",
@@ -160,29 +160,41 @@ describe("SessionService lifecycle and idempotency", () => {
 
       expect(delivery).toMatchObject({
         provider_status: providerStatus,
-        session_status: "cancelled",
-        session_ended: true,
+        session_status: "notified",
+        session_ended: false,
+        phone_retry: { state: "scheduled", automaticCallbacksUsed: 0 },
       });
-      expect(store.getById(created.id)?.status).toBe("cancelled");
-      expect(endRoom).toHaveBeenCalledWith(created.id);
+      expect(store.getById(created.id)?.status).toBe("notified");
+      expect(store.getById(created.id)?.phoneRetry?.nextRetryAt).toBeTruthy();
+      expect(endRoom).toHaveBeenCalledWith(expect.stringContaining(`${created.id}-call-1`));
     },
   );
 
   it("allows the phone voice agent to complete a waiting session", async () => {
     const created = await service.create({ ...baseInput, idempotency_key: "voice-confirm" });
+    const preview = service.preview(created.id, { approved: true }, "Approved by phone");
 
     const completed = service.confirm(
       created.id,
       { approved: true },
       "Approved by phone",
       "voice_agent",
+      undefined,
+      "voice-submit-1",
+      preview!.revision,
     );
 
     expect(completed?.status).toBe("completed");
     expect(completed?.humanConfirmation?.method).toBe("voice_agent");
+    expect(completed?.capturedContext).toEqual({
+      steering: [],
+      additional_instructions: [],
+      new_requests: [],
+      unresolved_topics: [],
+    });
   });
 
-  it("reconciles and ends terminal phone calls without a browser poll", async () => {
+  it("reconciles and schedules callbacks without a browser poll", async () => {
     const telephony: TelephonyAdapter = {
       name: "twilio",
       call: async () => ({ success: true, channel: "twilio", callId: "CA-background" }),
@@ -205,10 +217,233 @@ describe("SessionService lifecycle and idempotency", () => {
     });
 
     expect(await twilioService.reconcileTelephonyDeliveries()).toBe(1);
-    expect(store.getById(created.id)?.status).toBe("cancelled");
+    expect(store.getById(created.id)?.status).toBe("notified");
+    expect(store.getById(created.id)?.phoneRetry?.state).toBe("scheduled");
   });
 
-  it("marks phone-primary delivery failed when Twilio fails even if a secure link exists", async () => {
+  it("recovers a stale scheduler claim after restart", async () => {
+    const created = await service.create({
+      ...baseInput,
+      initiator: { agent_id: "svc-stale-phone-claim", harness: "vitest" },
+      idempotency_key: "stale-phone-claim",
+    });
+    const claimed = store.createPhoneAttempt({
+      id: "call_stale_claim",
+      sessionId: created.id,
+      operatorId: "me",
+      trigger: "initial",
+      status: "dialing",
+    });
+    store.updatePhoneAttempt(claimed.id, {
+      startedAt: new Date(Date.now() - 61_000).toISOString(),
+    });
+
+    expect(await service.processDuePhoneRetries()).toBe(0);
+    expect(store.getPhoneAttempt(claimed.id)).toMatchObject({
+      status: "failed",
+      retryable: true,
+    });
+    expect(store.latestPhoneAttempt(created.id)).toMatchObject({
+      trigger: "automatic",
+      status: "scheduled",
+    });
+    expect(store.getById(created.id)?.phoneRetry?.state).toBe("scheduled");
+  });
+
+  it("dispatches a due callback in a fresh room and counts the automatic slot", async () => {
+    const call = vi.fn(async () => ({ success: true, channel: "twilio", callId: `CA-${call.mock.calls.length + 1}` }));
+    let providerStatus = "no-answer";
+    const telephony: TelephonyAdapter = {
+      name: "twilio",
+      call,
+      status: async () => ({ success: true, status: providerStatus }),
+      test: async () => ({ ok: true, message: "ready" }),
+    };
+    const createRoom = vi.fn(async (_session, options?: { roomName?: string; surface?: "browser" | "phone" }) => ({ roomName: options?.roomName ?? "browser" }));
+    const config = configFor(dir);
+    config.conversation.realtime.api_key = "test-openai-key";
+    config.routes.default.notify = ["twilio", "secure_link"];
+    const twilioService = new SessionService(
+      store,
+      config,
+      "test-jwt-secret-with-sufficient-entropy",
+      { name: "test", createRoom, endRoom: async () => undefined },
+      telephony,
+    );
+    const created = await twilioService.create({
+      ...baseInput,
+      initiator: { agent_id: "svc-due-retry", harness: "vitest" },
+      idempotency_key: "due-retry",
+    });
+    await twilioService.getTelephonyDelivery(created.id);
+    const scheduled = store.latestPhoneAttempt(created.id)!;
+    store.updatePhoneAttempt(scheduled.id, { scheduledAt: new Date(Date.now() - 1_000).toISOString() });
+    providerStatus = "ringing";
+    expect(await twilioService.processDuePhoneRetries()).toBe(1);
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(createRoom.mock.calls[0]?.[1]?.roomName).not.toBe(createRoom.mock.calls[1]?.[1]?.roomName);
+    expect(createRoom.mock.calls[0]?.[1]?.surface).toBe("phone");
+    expect(createRoom.mock.calls[1]?.[1]?.surface).toBe("phone");
+    expect(store.getById(created.id)?.phoneRetry).toMatchObject({
+      automaticCallbacksUsed: 1,
+      attemptCount: 2,
+      state: "dialing",
+    });
+  });
+
+  it("never schedules an automatic callback under the never policy", async () => {
+    const telephony: TelephonyAdapter = {
+      name: "twilio",
+      call: async () => ({ success: true, channel: "twilio", callId: "CA-never" }),
+      status: async () => ({ success: true, status: "no-answer" }),
+      test: async () => ({ ok: true, message: "ready" }),
+    };
+    const config = configFor(dir);
+    config.conversation.realtime.api_key = "test-openai-key";
+    config.routes.default.notify = ["twilio", "secure_link"];
+    config.operators.me!.alerts = { ...DEFAULT_OPERATOR_ALERTS, phone_retry_policy: "never" };
+    const twilioService = new SessionService(store, config, "test-jwt-secret-with-sufficient-entropy", undefined, telephony);
+    const created = await twilioService.create({
+      ...baseInput,
+      initiator: { agent_id: "svc-never-retry", harness: "vitest" },
+      idempotency_key: "never-retry",
+    });
+    await twilioService.getTelephonyDelivery(created.id);
+    expect(store.getById(created.id)?.status).toBe("notified");
+    expect(store.getById(created.id)?.phoneRetry).toMatchObject({ policy: "never", state: "stopped" });
+    expect(store.listPhoneAttempts(created.id)).toHaveLength(1);
+  });
+
+  it("cancels active phone work when the session expires", async () => {
+    const cancel = vi.fn(async () => ({ success: true }));
+    const closeRoom = vi.fn(async () => undefined);
+    const telephony: TelephonyAdapter = {
+      name: "twilio",
+      call: async () => ({ success: true, channel: "twilio", callId: "CA-expiring" }),
+      cancel,
+      test: async () => ({ ok: true, message: "ready" }),
+    };
+    const config = configFor(dir);
+    config.conversation.realtime.api_key = "test-openai-key";
+    config.routes.default.notify = ["twilio", "secure_link"];
+    const twilioService = new SessionService(
+      store,
+      config,
+      "test-jwt-secret-with-sufficient-entropy",
+      {
+        name: "test",
+        createRoom: async (_session, options) => ({ roomName: options?.roomName ?? "room" }),
+        endRoom: closeRoom,
+      },
+      telephony,
+    );
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const created = await twilioService.create({
+      ...baseInput,
+      initiator: { agent_id: "svc-expiry-phone", harness: "vitest" },
+      idempotency_key: "expiry-phone",
+      expires_at: expiresAt,
+    });
+
+    expect(twilioService.expireDueSessions(new Date(Date.parse(expiresAt) + 1).toISOString())).toBe(1);
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledWith("CA-expiring"));
+    expect(store.getById(created.id)).toMatchObject({
+      status: "expired",
+      phoneRetry: { state: "stopped", automaticStopped: true },
+    });
+    expect(closeRoom).toHaveBeenCalledWith(expect.stringContaining(`${created.id}-call-1`));
+    expect(store.latestPhoneAttempt(created.id)?.status).toBe("canceled");
+  });
+
+  it("disconnects idle LiveKit and Twilio resources without closing the decision", async () => {
+    const cancel = vi.fn(async () => ({ success: true }));
+    const closeRoom = vi.fn(async () => undefined);
+    const telephony: TelephonyAdapter = {
+      name: "twilio",
+      call: async () => ({ success: true, channel: "twilio", callId: "CA-idle" }),
+      cancel,
+      test: async () => ({ ok: true, message: "ready" }),
+    };
+    const config = configFor(dir);
+    config.conversation.realtime.api_key = "test-openai-key";
+    config.routes.default.notify = ["twilio", "secure_link"];
+    const twilioService = new SessionService(
+      store,
+      config,
+      "test-jwt-secret-with-sufficient-entropy",
+      {
+        name: "test",
+        createRoom: async (_session, options) => ({ roomName: options?.roomName ?? "room" }),
+        endRoom: closeRoom,
+      },
+      telephony,
+    );
+    const created = await twilioService.create({
+      ...baseInput,
+      initiator: { agent_id: "svc-idle-phone", harness: "vitest" },
+      idempotency_key: "idle-phone",
+    });
+
+    const disconnected = await twilioService.disconnectVoice(created.id, "idle_timeout");
+
+    expect(disconnected).toMatchObject({
+      id: created.id,
+      status: "notified",
+      phoneRetry: { state: "stopped", automaticStopped: true },
+    });
+    expect(cancel).toHaveBeenCalledWith("CA-idle");
+    expect(closeRoom).toHaveBeenCalledWith(expect.stringContaining(`${created.id}-call-1`));
+    expect(closeRoom).toHaveBeenCalledWith(created.id);
+    expect(store.latestPhoneAttempt(created.id)?.status).toBe("canceled");
+    expect(store.getEvents(created.id).some((event) => event.type === "session.voice_disconnected")).toBe(true);
+  });
+
+  it("does not redial when confirmation wins the call-disconnect race", async () => {
+    const cancel = vi.fn(async () => ({ success: true }));
+    const telephony: TelephonyAdapter = {
+      name: "twilio",
+      call: async () => ({ success: true, channel: "twilio", callId: "CA-confirmed" }),
+      status: async () => ({ success: true, status: "completed" }),
+      cancel,
+      test: async () => ({ ok: true, message: "ready" }),
+    };
+    const config = configFor(dir);
+    config.conversation.realtime.api_key = "test-openai-key";
+    config.routes.default.notify = ["twilio", "secure_link"];
+    const twilioService = new SessionService(
+      store,
+      config,
+      "test-jwt-secret-with-sufficient-entropy",
+      undefined,
+      telephony,
+    );
+    const created = await twilioService.create({
+      ...baseInput,
+      initiator: { agent_id: "svc-confirm-race", harness: "vitest" },
+      idempotency_key: "confirm-race",
+    });
+    const preview = twilioService.preview(created.id, { approved: true }, "Approved");
+    const confirmed = twilioService.confirm(
+      created.id,
+      { approved: true },
+      "Approved",
+      "voice_agent",
+      undefined,
+      "confirmed-race-submission",
+      preview!.revision,
+    );
+
+    expect(confirmed).toMatchObject({
+      status: "completed",
+      pendingDecision: undefined,
+      phoneRetry: { state: "stopped", automaticStopped: true },
+    });
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledWith("CA-confirmed"));
+    expect(await twilioService.processDuePhoneRetries()).toBe(0);
+    expect(store.listPhoneAttempts(created.id)).toHaveLength(1);
+  });
+
+  it("keeps the session open when phone delivery fails and a secure link exists", async () => {
     const telephony: TelephonyAdapter = {
       name: "twilio",
       call: async () => ({ success: false, channel: "twilio", error: "dial failed" }),
@@ -231,11 +466,67 @@ describe("SessionService lifecycle and idempotency", () => {
     );
 
     const created = await twilioService.create({ ...baseInput, idempotency_key: "twilio-fallback" });
-    expect(created.status).toBe("failed");
+    expect(created.status).toBe("notified");
     expect(store.getChannelDelivery(created.id, "twilio")).toMatchObject({
       status: "failed",
       error: "dial failed",
     });
+    expect(created.phoneRetry?.state).toBe("scheduled");
+  });
+
+  it("blocks retries for permanent phone configuration failures", async () => {
+    const telephony: TelephonyAdapter = {
+      name: "twilio",
+      call: async () => ({
+        success: false,
+        channel: "twilio",
+        error: "The destination number is invalid",
+        retryable: false,
+      }),
+      test: async () => ({ ok: true, message: "ready" }),
+    };
+    const config = configFor(dir);
+    config.conversation.realtime.api_key = "test-openai-key";
+    config.routes.default.notify = ["twilio", "secure_link"];
+    const twilioService = new SessionService(
+      store,
+      config,
+      "test-jwt-secret-with-sufficient-entropy",
+      undefined,
+      telephony,
+    );
+    const created = await twilioService.create({ ...baseInput, idempotency_key: "permanent-phone-failure" });
+    expect(created.status).toBe("notified");
+    expect(created.phoneRetry).toMatchObject({ state: "blocked", blockedReason: "The destination number is invalid" });
+    expect(store.listPhoneAttempts(created.id)).toHaveLength(1);
+  });
+
+  it("persists only the latest preview and rejects stale voice submissions", async () => {
+    const created = await service.create({ ...baseInput, idempotency_key: "preview-revision" });
+    const first = service.preview(created.id, { approved: false }, "Not yet");
+    const second = service.preview(created.id, { approved: true }, "Approved", undefined, first!.revision);
+
+    expect(second?.revision).toBe(2);
+    expect(store.getById(created.id)?.pendingDecision?.result).toEqual({ approved: true });
+    expect(() => service.confirm(
+      created.id,
+      { approved: false },
+      "Not yet",
+      "voice_agent",
+      undefined,
+      "stale-submission",
+      first!.revision,
+    )).toThrow(/pending decision changed/i);
+  });
+
+  it("returns an already-completed idempotent submission and rejects conflicting reuse", async () => {
+    const created = await service.create({ ...baseInput, idempotency_key: "submission-idempotency" });
+    const first = service.confirm(created.id, { approved: true }, "Approved", "text_form", undefined, "submit-1");
+    const duplicate = service.confirm(created.id, { approved: true }, "Approved", "text_form", undefined, "submit-1");
+    expect(first?.status).toBe("completed");
+    expect(duplicate?.status).toBe("completed");
+    expect(() => service.confirm(created.id, { approved: false }, "Rejected", "text_form", undefined, "submit-1"))
+      .toThrow(/reused/i);
   });
 
   it("rejects the same key with a different payload", async () => {
@@ -342,14 +633,15 @@ describe("SessionService lifecycle and idempotency", () => {
   });
 
   it("snoozes a notified session and wakes with re-notify", async () => {
-    const session = await service.create({ ...baseInput, idempotency_key: "snooze-1" });
+    const snoozeInput = { ...baseInput, initiator: { agent_id: "svc-snooze", harness: "vitest" } };
+    const session = await service.create({ ...snoozeInput, idempotency_key: "snooze-1" });
     expect(session.status).toBe("notified");
 
     const snoozed = service.snooze(session.id, 1);
     expect(snoozed?.status).toBe("snoozed");
     expect(snoozed?.snoozeUntil).toBeTruthy();
 
-    const seen = await service.create({ ...baseInput, objective: "seen me", idempotency_key: "seen-1" });
+    const seen = await service.create({ ...snoozeInput, objective: "seen me", idempotency_key: "seen-1" });
     const marked = service.seen(seen.id);
     expect(marked?.status).toBe("notified");
     expect(marked?.operatorSeenAt).toBeTruthy();
@@ -364,7 +656,11 @@ describe("SessionService lifecycle and idempotency", () => {
   });
 
   it("rejects snooze minutes outside the allowlist", async () => {
-    const session = await service.create({ ...baseInput, idempotency_key: "snooze-bad" });
+    const session = await service.create({
+      ...baseInput,
+      initiator: { agent_id: "svc-snooze-bad", harness: "vitest" },
+      idempotency_key: "snooze-bad",
+    });
     expect(() => service.snooze(session.id, 7)).toThrow(/not allowed/);
   });
 });

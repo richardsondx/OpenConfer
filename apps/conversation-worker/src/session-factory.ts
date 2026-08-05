@@ -5,6 +5,7 @@ import {
   DEFAULT_ELEVENLABS_VOICE,
   DEFAULT_OLLAMA_BASE_URL,
   DEFAULT_OPENROUTER_BASE_URL,
+  DEFAULT_REALTIME_MODEL,
   type LlmProvider,
   type SttProvider,
   type TtsProvider,
@@ -32,7 +33,8 @@ export function readSpeakingWorkerEnv(env: NodeJS.ProcessEnv = process.env): Spe
   const speakingMode = env.OPENCONFER_SPEAKING_MODE === "pipeline" ? "pipeline" : "realtime";
   return {
     speakingMode,
-    realtimeModel: env.OPENAI_REALTIME_MODEL || env.OPENCONFER_REALTIME_MODEL || "gpt-realtime",
+    realtimeModel:
+      env.OPENAI_REALTIME_MODEL || env.OPENCONFER_REALTIME_MODEL || DEFAULT_REALTIME_MODEL,
     realtimeVoice: env.OPENAI_VOICE || env.OPENCONFER_REALTIME_VOICE || "marin",
     openaiApiKey: env.OPENAI_API_KEY || env.OPENCONFER_REALTIME_API_KEY,
     sttProvider: (env.OPENCONFER_STT_PROVIDER as SttProvider) || "deepgram",
@@ -61,6 +63,23 @@ export function speakingWorkerEnabled(config: SpeakingWorkerEnv): boolean {
     (config.llmProvider === "openai" && !!config.openaiApiKey);
   const ttsOk = !!config.ttsApiKey || (config.ttsProvider === "openai" && !!config.openaiApiKey);
   return sttOk && llmOk && ttsOk;
+}
+
+export function realtimeModelOptions(config: SpeakingWorkerEnv, locale: string) {
+  const supportsReasoning = /^gpt-realtime-2(?:\.|$)/.test(config.realtimeModel);
+  return {
+    model: config.realtimeModel,
+    voice: config.realtimeVoice,
+    inputAudioTranscription: { model: "gpt-4o-mini-transcribe", language: locale },
+    turnDetection: {
+      type: "semantic_vad" as const,
+      eagerness: "auto" as const,
+      create_response: true,
+      interrupt_response: true,
+    },
+    ...(supportsReasoning ? { reasoning: { effort: "low" as const } } : {}),
+    ...(config.openaiApiKey ? { apiKey: config.openaiApiKey } : {}),
+  };
 }
 
 async function buildStt(config: SpeakingWorkerEnv, locale: string) {
@@ -134,12 +153,11 @@ export async function createAgentSession(
     // Realtime only needs the OpenAI plugin — keep pipeline plugins lazy so a
     // partial CLI deploy (missing Deepgram/Cartesia) still starts Live mode.
     return new voice.AgentSession({
-      llm: new openai.realtime.RealtimeModel({
-        model: config.realtimeModel,
-        voice: config.realtimeVoice,
-        inputAudioTranscription: { model: "gpt-4o-mini-transcribe", language: locale },
-        ...(config.openaiApiKey ? { apiKey: config.openaiApiKey } : {}),
-      }),
+      llm: new openai.realtime.RealtimeModel(realtimeModelOptions(config, locale)),
+      turnHandling: {
+        turnDetection: "realtime_llm",
+        interruption: { enabled: true },
+      },
     });
   }
 

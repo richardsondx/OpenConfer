@@ -8,7 +8,7 @@ describe("VoicePipelineDiagram", () => {
       <VoicePipelineDiagram
         mode="realtime"
         preset="live"
-        realtimeModel="gpt-realtime"
+        realtimeModel="gpt-realtime-2.1"
         realtimeVoice="marin"
         sttProvider="deepgram"
         sttModel="nova-3"
@@ -19,7 +19,7 @@ describe("VoicePipelineDiagram", () => {
       />,
     );
     expect(screen.getByText("Realtime")).toBeInTheDocument();
-    expect(screen.getByText(/gpt-realtime · marin/i)).toBeInTheDocument();
+    expect(screen.getByText(/gpt-realtime-2.1 · marin/i)).toBeInTheDocument();
     expect(screen.getByText(/LiveKit/i)).toBeInTheDocument();
     expect(screen.queryByText("Transcriber")).not.toBeInTheDocument();
   });
@@ -29,7 +29,7 @@ describe("VoicePipelineDiagram", () => {
       <VoicePipelineDiagram
         mode="pipeline"
         preset="flexible"
-        realtimeModel="gpt-realtime"
+        realtimeModel="gpt-realtime-2.1"
         realtimeVoice="marin"
         sttProvider="deepgram"
         sttModel="nova-3"

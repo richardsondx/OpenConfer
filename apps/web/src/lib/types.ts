@@ -1,3 +1,31 @@
+export interface CapturedContext {
+  steering: string[];
+  additional_instructions: string[];
+  new_requests: string[];
+  unresolved_topics: string[];
+}
+
+export interface PendingDecision {
+  result: Record<string, unknown>;
+  summary?: string;
+  captured_context?: CapturedContext;
+  revision: number;
+  previewed_at: string;
+}
+
+export interface PhoneRetryView {
+  policy: "never" | "brief" | "persistent";
+  state: "idle" | "scheduled" | "dialing" | "in_call" | "exhausted" | "stopped" | "blocked";
+  attempt_count: number;
+  automatic_callbacks_used: number;
+  max_automatic_callbacks: number;
+  automatic_stopped: boolean;
+  next_retry_at?: string;
+  deadline_at?: string;
+  last_outcome?: string;
+  blocked_reason?: string;
+}
+
 export interface JoinSession {
   id: string;
   type: string;
@@ -26,6 +54,9 @@ export interface JoinSession {
   result_schema?: Record<string, unknown>;
   result?: Record<string, unknown>;
   summary?: string;
+  captured_context?: CapturedContext;
+  pending_decision?: PendingDecision;
+  phone_retry?: PhoneRetryView;
   /** True when the originating agent registered a callback for result delivery. */
   has_callback?: boolean;
 }

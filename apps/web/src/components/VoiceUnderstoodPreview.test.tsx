@@ -58,4 +58,27 @@ describe("VoiceUnderstoodPreview", () => {
     expect(screen.getByText(/^tacos$/)).toBeInTheDocument();
     expect(screen.queryByText(/^pizza$/)).not.toBeInTheDocument();
   });
+
+  it("renders non-empty captured categories separately, including sidecar-only updates", () => {
+    render(
+      <VoiceUnderstoodPreview
+        understood={{
+          captured_context: {
+            steering: ["Require passkeys"],
+            additional_instructions: ["Update the runbook"],
+            new_requests: ["Audit mobile login"],
+            unresolved_topics: [],
+          },
+        }}
+        sessionType="decision"
+      />,
+    );
+
+    expect(screen.getByText(/context noted/i)).toBeInTheDocument();
+    expect(screen.getByText(/also captured/i)).toBeInTheDocument();
+    expect(screen.getByText(/require passkeys/i)).toBeInTheDocument();
+    expect(screen.getByText(/update the runbook/i)).toBeInTheDocument();
+    expect(screen.getByText(/audit mobile login/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Unresolved$/i)).not.toBeInTheDocument();
+  });
 });

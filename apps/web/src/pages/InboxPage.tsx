@@ -12,6 +12,7 @@ import { DEFAULT_ALERT_PREFS, normalizeAlertPrefs } from "../lib/alert-prefs";
 import { shouldRingSession, startIncomingRing, type RingHandle } from "../lib/incoming-ring";
 import {
   cancelSession,
+  callSessionAgain,
   createDemoSession,
   declineSession,
   fetchPhoneDelivery,
@@ -19,6 +20,7 @@ import {
   joinPathFromUrl,
   readAgentConnected,
   snoozeSession,
+  stopSessionCallbacks,
   writeAgentConnected,
   type SettingsView,
   type DemoUseCase,
@@ -111,7 +113,7 @@ function normalizedPhoneStatus(delivery: PhoneDelivery): string {
 }
 
 function isFinalPhoneStatus(status: string): boolean {
-  return ["completed", "busy", "failed", "no-answer", "canceled"].includes(status);
+  return ["completed", "busy", "failed", "no-answer", "canceled", "machine"].includes(status);
 }
 
 function PhoneCallFeedback({
@@ -130,7 +132,7 @@ function PhoneCallFeedback({
   onDismiss: () => void;
 }) {
   const status = normalizedPhoneStatus(delivery);
-  const failed = ["busy", "failed", "no-answer", "canceled"].includes(status);
+  const failed = ["busy", "failed", "no-answer", "canceled", "machine"].includes(status);
   const showSettings = status === "failed";
   const canCancel = Boolean(delivery.sessionId) && !isFinalPhoneStatus(status);
   const destinationHint = destination ? ` ending in ${destination.slice(-4)}` : "";
@@ -145,21 +147,23 @@ function PhoneCallFeedback({
           : status === "completed"
             ? {
                 title: "Test call ended",
-                detail: delivery.session_ended
-                  ? "The call ended before a decision was recorded, so the session ended automatically."
-                  : "Twilio reports that the call connected and ended.",
+                detail: delivery.phone_retry?.next_retry_at
+                  ? `No decision was recorded. OpenConfer will call again at ${new Date(delivery.phone_retry.next_retry_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`
+                  : "Twilio reports that the call connected and ended. The session remains available in your inbox.",
               }
             : status === "busy"
-              ? { title: "Your phone was busy", detail: "The session ended automatically. Try again when the line is free." }
+              ? { title: "Your phone was busy", detail: "The session remains open and follows your callback preference." }
               : status === "no-answer"
-                ? { title: "No answer", detail: "The session ended automatically. Check the number and try again." }
+                ? { title: "No answer", detail: "The session remains open and follows your callback preference." }
+                : status === "machine"
+                  ? { title: "Voicemail detected", detail: "No decision details were left. The session follows your callback preference." }
                 : status === "canceled"
-                  ? { title: "Call canceled", detail: "Twilio canceled the call and the session ended automatically." }
+                  ? { title: "Call canceled", detail: "The session remains open and follows your callback preference." }
                   : {
                       title: "Call failed",
                       detail: delivery.error
-                        ? `${delivery.error} The session ended automatically.`
-                        : "Twilio could not place the call. The session ended automatically.",
+                        ? `${delivery.error} The session remains available in your inbox.`
+                        : "Twilio could not place the call. The session remains available in your inbox.",
                     };
 
   return (
@@ -316,6 +320,7 @@ export function InboxPage() {
   const [phoneCallFeedback, setPhoneCallFeedback] = useState<(PhoneDelivery & { sessionId?: string }) | null>(null);
   const [lastTestUseCase, setLastTestUseCase] = useState<DemoUseCase>("decision");
   const [endingId, setEndingId] = useState<string | null>(null);
+  const [phoneActionId, setPhoneActionId] = useState<string | null>(null);
   const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [endingOpen, setEndingOpen] = useState(false);
   const [ringingSessionId, setRingingSessionId] = useState<string | null>(null);
@@ -533,6 +538,34 @@ export function InboxPage() {
     } catch {
       setCopiedLinkId(null);
       setError("Could not copy the secure link. Open the session and copy it from your address bar.");
+    }
+  };
+
+  const callAgain = async (sessionId: string) => {
+    if (!token) return;
+    setPhoneActionId(sessionId);
+    setError(null);
+    try {
+      await callSessionAgain(token, sessionId);
+      await loadSessions({ quiet: true });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not start another call.");
+    } finally {
+      setPhoneActionId(null);
+    }
+  };
+
+  const stopCallbacks = async (sessionId: string) => {
+    if (!token) return;
+    setPhoneActionId(sessionId);
+    setError(null);
+    try {
+      await stopSessionCallbacks(token, sessionId);
+      await loadSessions({ quiet: true });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not stop callbacks.");
+    } finally {
+      setPhoneActionId(null);
     }
   };
 
@@ -760,6 +793,24 @@ export function InboxPage() {
               <>
                 <div className="session-row-objective">{s.objective}</div>
                 {outcome.detail && <div className="session-row-outcome">{outcome.detail}</div>}
+                {s.phone_retry && s.phone_retry.state !== "idle" && (
+                  <div className="session-row-outcome">
+                    {s.phone_retry.state === "scheduled" && s.phone_retry.next_retry_at
+                      ? `Calling again at ${new Date(s.phone_retry.next_retry_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                      : s.phone_retry.state === "dialing" || s.phone_retry.state === "in_call"
+                        ? "Phone call in progress"
+                        : s.phone_retry.state === "stopped"
+                          ? "Automatic calls stopped"
+                          : s.phone_retry.state === "blocked"
+                            ? "Phone setup needs attention"
+                            : s.phone_retry.state === "exhausted"
+                              ? "No more automatic calls — still waiting"
+                              : null}
+                  </div>
+                )}
+                {s.pending_decision && (
+                  <div className="session-row-meta">Pending decision preserved — reconfirmation required</div>
+                )}
                 <div className="session-row-meta">{metaParts.join(" · ")}</div>
               </>
             );
@@ -814,6 +865,26 @@ export function InboxPage() {
                           <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
                         </svg>
                       )}
+                    </Button>
+                  )}
+                  {open && s.phone_retry && ["scheduled", "exhausted", "stopped", "blocked"].includes(s.phone_retry.state) && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={phoneActionId === s.id}
+                      onClick={() => void callAgain(s.id)}
+                    >
+                      Call again
+                    </Button>
+                  )}
+                  {open && s.phone_retry && !s.phone_retry.automatic_stopped && s.phone_retry.state === "scheduled" && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={phoneActionId === s.id}
+                      onClick={() => void stopCallbacks(s.id)}
+                    >
+                      Stop callbacks
                     </Button>
                   )}
                   {open && (

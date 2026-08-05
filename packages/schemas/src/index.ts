@@ -5,6 +5,7 @@ import {
   DEFAULT_ELEVENLABS_VOICE,
   DEFAULT_OLLAMA_BASE_URL,
   DEFAULT_OPENROUTER_BASE_URL,
+  DEFAULT_REALTIME_MODEL,
   normalizeSpeakingFields,
   type SpeakingConversationFields,
 } from "./speaking.js";
@@ -78,10 +79,29 @@ export const CreateSessionSchema = z.object({
 
 export type CreateSessionInput = z.infer<typeof CreateSessionSchema>;
 
+export const CapturedContextSchema = z.object({
+  steering: z.array(z.string()).default([]),
+  additional_instructions: z.array(z.string()).default([]),
+  new_requests: z.array(z.string()).default([]),
+  unresolved_topics: z.array(z.string()).default([]),
+});
+
+export type CapturedContext = z.infer<typeof CapturedContextSchema>;
+
 export const ConfirmResultSchema = z.object({
   result: z.record(z.unknown()),
   summary: z.string().optional(),
+  captured_context: CapturedContextSchema.optional(),
   method: z.enum(["session_ui", "text_form", "voice_agent"]).default("session_ui"),
+  submission_id: z.string().trim().min(1).max(200).optional(),
+  preview_revision: z.number().int().positive().optional(),
+});
+
+export const PreviewDecisionSchema = z.object({
+  result: z.record(z.unknown()),
+  summary: z.string().optional(),
+  captured_context: CapturedContextSchema.optional(),
+  expected_revision: z.number().int().nonnegative().optional(),
 });
 
 export const AckResultSchema = z.object({
@@ -116,6 +136,8 @@ export const OperatorAlertsObjectSchema = z.object({
   browser_notifications: z.boolean().default(false),
   /** Single default snooze duration used by the inbox/join Snooze button. */
   snooze_minutes: SnoozeMinutesSchema.default(3),
+  /** Bounded automatic phone callbacks after a missed or disconnected call. */
+  phone_retry_policy: z.enum(["never", "brief", "persistent"]).default("brief"),
 });
 
 export const OperatorAlertsSchema = z.preprocess((input) => {
@@ -137,11 +159,12 @@ export const DEFAULT_OPERATOR_ALERTS: OperatorAlerts = {
   sound: true,
   browser_notifications: false,
   snooze_minutes: 3,
+  phone_retry_policy: "brief",
 };
 
 const RealtimeConfigSchema = z.object({
   provider: z.literal("openai").default("openai"),
-  model: z.string().default("gpt-realtime"),
+  model: z.string().default(DEFAULT_REALTIME_MODEL),
   voice: z.string().default("marin"),
   api_key: z.string().optional(),
 });
@@ -171,7 +194,7 @@ const ConversationObjectSchema = z.object({
   speaking_mode: z.enum(["realtime", "pipeline"]).default("realtime"),
   preset: z.enum(["live", "flexible", "local", "custom"]).default("live"),
   /** @deprecated Prefer realtime.model — kept in sync for older YAML. */
-  model: z.string().default("gpt-realtime"),
+  model: z.string().default(DEFAULT_REALTIME_MODEL),
   /** @deprecated Prefer realtime.voice — kept in sync for older YAML. */
   voice: z.string().default("marin"),
   livekit_url: z.string().optional(),
@@ -182,7 +205,7 @@ const ConversationObjectSchema = z.object({
   openai_api_key: z.string().optional(),
   realtime: RealtimeConfigSchema.default({
     provider: "openai",
-    model: "gpt-realtime",
+    model: DEFAULT_REALTIME_MODEL,
     voice: "marin",
   }),
   stt: SttConfigSchema.default({

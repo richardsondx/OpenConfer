@@ -96,14 +96,147 @@ describe.sequential("server API", () => {
       method: "POST",
       url: `/v1/sessions/${id}/confirm`,
       headers: { "x-join-token": token },
-      payload: { result: { approved: true } },
+      payload: {
+        result: { approved: true },
+        captured_context: {
+          steering: ["Require passkeys"],
+          additional_instructions: ["Update the runbook"],
+          new_requests: ["Audit mobile login next"],
+          unresolved_topics: ["Recovery codes"],
+        },
+      },
     });
     expect(confirmed.statusCode).toBe(200);
+    expect(confirmed.json().captured_context).toEqual({
+      steering: ["Require passkeys"],
+      additional_instructions: ["Update the runbook"],
+      new_requests: ["Audit mobile login next"],
+      unresolved_topics: ["Recovery codes"],
+    });
+    const saved = await app.inject({
+      method: "GET",
+      url: `/v1/sessions/${id}`,
+      headers: { authorization: "Bearer test-api-token" },
+    });
+    expect(saved.json().captured_context.steering).toEqual(["Require passkeys"]);
+    const eventResponse = await app.inject({
+      method: "GET",
+      url: `/v1/sessions/${id}/events`,
+      headers: { authorization: "Bearer test-api-token" },
+    });
+    expect(
+      eventResponse
+        .json()
+        .events.find((event: { type: string }) => event.type === "session.result_ready").payload
+        .captured_context.steering,
+    ).toEqual(["Require passkeys"]);
     expect((await app.inject({ method: "GET", url: `/v1/join/${id}`, headers: { "x-join-token": token } })).json().session.status).toBe("completed");
     expect(
       (await app.inject({ method: "POST", url: `/v1/join/${id}/connect`, payload: { token } }))
         .statusCode,
     ).toBe(404);
+  });
+
+  it("protects previews and makes voice confirmation revision-safe and idempotent", async () => {
+    const headers = { authorization: "Bearer test-api-token" };
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers,
+      payload: {
+        ...createBody,
+        initiator: { agent_id: "api-preview-test", harness: "vitest" },
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    expect(created.json().phone_retry).toMatchObject({
+      policy: "brief",
+      max_automatic_callbacks: 2,
+    });
+    const id = created.json().id as string;
+
+    const unauthorized = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${id}/preview`,
+      payload: { result: { approved: true } },
+    });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${id}/preview`,
+      headers,
+      payload: {
+        result: { approved: true },
+        summary: "Approve the deployment",
+        expected_revision: 0,
+      },
+    });
+    expect(preview.statusCode, preview.body).toBe(200);
+    expect(preview.json()).toMatchObject({ revision: 1, result: { approved: true } });
+    const replacement = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${id}/preview`,
+      headers,
+      payload: {
+        result: { approved: true },
+        summary: "Approve the deployment",
+        expected_revision: 1,
+      },
+    });
+    expect(replacement.statusCode, replacement.body).toBe(200);
+    expect(replacement.json().revision).toBe(2);
+
+    const stale = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${id}/confirm`,
+      headers,
+      payload: {
+        result: { approved: true },
+        summary: "Approve the deployment",
+        method: "voice_agent",
+        submission_id: "voice-submission-1",
+        preview_revision: 1,
+      },
+    });
+    expect(stale.statusCode).toBe(409);
+
+    const payload = {
+      result: { approved: true },
+      summary: "Approve the deployment",
+      method: "voice_agent",
+      submission_id: "voice-submission-1",
+      preview_revision: 2,
+    };
+    const confirmed = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${id}/confirm`,
+      headers,
+      payload,
+    });
+    expect(confirmed.statusCode, confirmed.body).toBe(200);
+    expect(confirmed.json()).toMatchObject({ status: "completed", result: { approved: true } });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/v1/sessions/${id}/confirm`,
+          headers,
+          payload,
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const conflicting = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${id}/confirm`,
+      headers,
+      payload: { ...payload, result: { approved: false } },
+    });
+    expect(conflicting.statusCode).toBe(409);
+    const saved = await app.inject({ method: "GET", url: `/v1/sessions/${id}`, headers });
+    expect(saved.json().pending_decision).toBeUndefined();
+    expect(saved.json().phone_retry.state).toBe("stopped");
   });
 
   it("requires a signing secret for callbacks", async () => {
@@ -147,7 +280,11 @@ describe.sequential("server API", () => {
       method: "POST",
       url: `/v1/sessions/${body.id}/confirm`,
       headers: { "x-join-token": token },
-      payload: { result: { approved: true }, method: "text_form" },
+      payload: {
+        result: { approved: true },
+        captured_context: { additional_instructions: ["Notify support"] },
+        method: "text_form",
+      },
     });
 
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
@@ -155,6 +292,12 @@ describe.sequential("server API", () => {
     await runWebhookBatch(store, fetchMock as typeof fetch);
     const [, init] = fetchMock.mock.calls[0]!;
     const headers = init?.headers as Record<string, string>;
+    expect(JSON.parse(init?.body as string).captured_context).toEqual({
+      steering: [],
+      additional_instructions: ["Notify support"],
+      new_requests: [],
+      unresolved_topics: [],
+    });
     expect(headers["X-OpenConfer-Event-Id"]).toMatch(/^evt_/);
     expect(headers["X-OpenConfer-Timestamp"]).toBeTruthy();
     expect(
@@ -176,11 +319,11 @@ describe.sequential("server API", () => {
       method: "POST",
       url: "/v1/sessions",
       headers: { authorization: "Bearer test-api-token" },
-      payload: { ...createBody, expires_at: new Date(Date.now() + 100).toISOString() },
+      payload: { ...createBody, expires_at: new Date(Date.now() + 1_000).toISOString() },
     });
     const body = response.json();
     const token = joinToken(body.join_url);
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
     const join = await app.inject({ method: "GET", url: `/v1/join/${body.id}`, headers: { "x-join-token": token } });
     expect(join.statusCode).toBe(200);
     expect(join.json().session.status).toBe("expired");
@@ -282,7 +425,7 @@ describe.sequential("server API", () => {
     expect(yaml).toContain("twilio-test-secret");
     expect(yaml).toContain("livekit_api_key: devkey");
     expect(yaml).toContain("openai_api_key: sk-test-key");
-    expect(yaml).toContain("model: gpt-realtime");
+    expect(yaml).toContain("model: gpt-realtime-2.1");
   });
 
   it("rotates the API token and blocks demos until voice is ready", async () => {

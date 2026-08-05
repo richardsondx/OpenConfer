@@ -1,6 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { ConferSession } from "@openconfer/core";
-import { generateSessionId } from "@openconfer/core";
+import type {
+  CapturedContext,
+  ConferSession,
+  PendingDecision,
+  PhoneRetryPolicy,
+  PhoneRetrySnapshot,
+} from "@openconfer/core";
+import { emptyCapturedContext, generateSessionId } from "@openconfer/core";
 import type { CreateSessionInput, OpenConferConfig, OperatorAlerts } from "@openconfer/schemas";
 import {
   ALLOWED_SNOOZE_MINUTES,
@@ -19,8 +25,17 @@ import type { ConversationAdapter, TelephonyAdapter, TelephonyCallResult } from 
 import { createLiveKitAdapter } from "@openconfer/conversation-livekit";
 import { createSecureLinkNotifier } from "@openconfer/notify-secure-link";
 import { createTwilioTelephonyAdapter } from "@openconfer/telephony-twilio";
-import type { SessionStore } from "@openconfer/storage-sqlite";
-import { evaluatePolicy, checkRateLimit } from "./policy.js";
+import type {
+  PhoneAttempt,
+  PhoneAttemptStatus,
+  SessionStore,
+} from "@openconfer/storage-sqlite";
+import {
+  evaluatePolicy,
+  checkRateLimit,
+  isOperatorInQuietHours,
+  nextOperatorQuietHoursEnd,
+} from "./policy.js";
 import { isCallbackUrlAllowed } from "./webhook-worker.js";
 
 export class IdempotencyConflictError extends Error {
@@ -30,7 +45,34 @@ export class IdempotencyConflictError extends Error {
   }
 }
 
+export class SubmissionConflictError extends Error {
+  constructor(message = "Submission id was reused with a different decision") {
+    super(message);
+    this.name = "SubmissionConflictError";
+  }
+}
+
+export class PreviewConflictError extends Error {
+  constructor(message = "The pending decision changed; preview again before submitting") {
+    super(message);
+    this.name = "PreviewConflictError";
+  }
+}
+
 const RESUMABLE_STATUSES = new Set(["created", "policy_check", "queued", "dispatching"]);
+const OPEN_SESSION_STATUSES = new Set(["notified", "snoozed", "joining", "active", "confirming"]);
+const ACTIVE_ATTEMPT_STATUSES = new Set(["dialing", "queued", "ringing", "in-progress"]);
+const TERMINAL_PHONE_STATUSES = new Set(["completed", "busy", "failed", "no-answer", "canceled"]);
+const RETRY_OFFSETS_MS: Record<PhoneRetryPolicy, number[]> = {
+  never: [],
+  brief: [60_000, 5 * 60_000],
+  persistent: [60_000, 3 * 60_000, 7 * 60_000, 15 * 60_000, 25 * 60_000],
+};
+const RETRY_WINDOW_MS: Record<PhoneRetryPolicy, number> = {
+  never: 0,
+  brief: 10 * 60_000,
+  persistent: 30 * 60_000,
+};
 
 export function fingerprintCreateInput(input: CreateSessionInput): string {
   const { idempotency_key: _ignored, ...payload } = input;
@@ -98,6 +140,31 @@ export class SessionService {
         : undefined,
       mock: !config.conversation.livekit_api_key,
     });
+  }
+
+  private phoneRetrySnapshot(operatorId: string): PhoneRetrySnapshot {
+    const policy =
+      this.config.operators[operatorId]?.alerts?.phone_retry_policy ??
+      DEFAULT_OPERATOR_ALERTS.phone_retry_policy;
+    return {
+      policy,
+      state: "idle",
+      attemptCount: 0,
+      automaticCallbacksUsed: 0,
+      automaticStopped: policy === "never",
+    };
+  }
+
+  /** Expire sessions and asynchronously tear down any phone work attached to them. */
+  expireDueSessions(now = new Date().toISOString()): number {
+    const due = this.store.listDueExpirations(now);
+    const count = this.store.expireDue(now);
+    for (const session of due) {
+      if (this.store.getById(session.id)?.status === "expired") {
+        void this.closePhoneAttempts(session.id, "canceled");
+      }
+    }
+    return count;
   }
 
   async create(input: CreateSessionInput): Promise<ConferSession> {
@@ -269,6 +336,7 @@ export class SessionService {
       expiresAt: input.expires_at,
       joinToken,
       joinUrl,
+      phoneRetry: this.phoneRetrySnapshot(input.participant.operator_id),
       createdAt: now,
       updatedAt: now,
     };
@@ -339,12 +407,12 @@ export class SessionService {
   }
 
   get(id: string): ConferSession | null {
-    this.store.expireDue();
+    this.expireDueSessions();
     return this.store.getById(id);
   }
 
   list(limit?: number): ConferSession[] {
-    this.store.expireDue();
+    this.expireDueSessions();
     return this.store.list(limit);
   }
 
@@ -385,7 +453,7 @@ export class SessionService {
   }
 
   snooze(id: string, minutes?: number): ConferSession | null {
-    this.store.expireDue();
+    this.expireDueSessions();
     const session = this.store.getById(id);
     if (!session || session.status !== "notified") return null;
     const preferred = this.operatorAlerts(session.participant.operatorId).snooze_minutes;
@@ -401,13 +469,13 @@ export class SessionService {
   }
 
   seen(id: string): ConferSession | null {
-    this.store.expireDue();
+    this.expireDueSessions();
     return this.store.markSeen(id);
   }
 
   /** Wake due snoozes and re-notify through configured channels. */
   async wakeDueSnoozes(): Promise<number> {
-    this.store.expireDue();
+    this.expireDueSessions();
     const due = this.store.listDueSnoozes();
     let woken = 0;
     for (const session of due) {
@@ -461,7 +529,7 @@ export class SessionService {
     token: string,
     allowClosed: boolean,
   ): Promise<ConferSession | null> {
-    this.store.expireDue();
+    this.expireDueSessions();
     const grant = await verifyJoinJwt(token, this.jwtSecret);
     if (!grant || grant.sessionId !== id) return null;
     const session = this.store.getById(id);
@@ -478,15 +546,66 @@ export class SessionService {
     return this.store.transitionWithEvent(id, "joining", "active", "session.active", {});
   }
 
+  preview(
+    id: string,
+    result: Record<string, unknown>,
+    summary?: string,
+    capturedContext?: CapturedContext,
+    expectedRevision?: number,
+  ): PendingDecision | null {
+    this.expireDueSessions();
+    const session = this.store.getById(id);
+    if (!session) return null;
+
+    if (!OPEN_SESSION_STATUSES.has(session.status)) return null;
+    const validation = validateResultAgainstSchema(result, session.resultSchema);
+    if (!validation.valid) {
+      throw new Error(`Result validation failed: ${validation.errors.join(", ")}`);
+    }
+    const currentRevision = session.pendingDecision?.revision ?? 0;
+    if (expectedRevision !== undefined && expectedRevision !== currentRevision) {
+      throw new PreviewConflictError();
+    }
+    const pendingDecision: PendingDecision = {
+      result,
+      summary,
+      capturedContext: capturedContext ?? emptyCapturedContext(),
+      revision: currentRevision + 1,
+      previewedAt: new Date().toISOString(),
+    };
+    this.store.update(id, { pendingDecision });
+    this.store.addEvent(id, "session.decision_previewed", {
+      revision: pendingDecision.revision,
+      summary,
+    });
+    return pendingDecision;
+  }
+
   confirm(
     id: string,
     result: Record<string, unknown>,
     summary?: string,
     method: "session_ui" | "text_form" | "voice_agent" = "session_ui",
+    capturedContext?: CapturedContext,
+    submissionId?: string,
+    previewRevision?: number,
   ): ConferSession | null {
-    this.store.expireDue();
-    const session = this.store.getById(id);
+    this.expireDueSessions();
+    let session = this.store.getById(id);
     if (!session) return null;
+
+    const normalizedCapturedContext = capturedContext ?? emptyCapturedContext();
+    const payloadFingerprint = createHash("sha256")
+      .update(stableStringify({ result, summary: summary ?? "", capturedContext: normalizedCapturedContext, method }))
+      .digest("hex");
+    const resolvedSubmissionId = submissionId ?? `legacy_${randomBytes(16).toString("hex")}`;
+    const existingSubmission = this.store.getDecisionSubmission(resolvedSubmissionId);
+    if (existingSubmission) {
+      if (existingSubmission.sessionId !== id || existingSubmission.payloadFingerprint !== payloadFingerprint) {
+        throw new SubmissionConflictError();
+      }
+      return this.store.getById(id);
+    }
 
     const allowedStatuses =
       method === "text_form" || method === "voice_agent"
@@ -497,6 +616,24 @@ export class SessionService {
     const validation = validateResultAgainstSchema(result, session.resultSchema);
     if (!validation.valid) {
       throw new Error(`Result validation failed: ${validation.errors.join(", ")}`);
+    }
+
+    if (method === "voice_agent") {
+      const pending = session.pendingDecision;
+      if (!pending || previewRevision === undefined || pending.revision !== previewRevision) {
+        throw new PreviewConflictError();
+      }
+      const pendingFingerprint = stableStringify({
+        result: pending.result,
+        summary: pending.summary ?? "",
+        capturedContext: pending.capturedContext ?? emptyCapturedContext(),
+      });
+      const submittedFingerprint = stableStringify({
+        result,
+        summary: summary ?? "",
+        capturedContext: normalizedCapturedContext,
+      });
+      if (pendingFingerprint !== submittedFingerprint) throw new PreviewConflictError();
     }
 
     if (session.status === "notified" || session.status === "snoozed") {
@@ -515,10 +652,18 @@ export class SessionService {
       this.store.transitionWithEvent(id, "active", "confirming", "session.confirming", {});
     }
 
+    session = this.store.getById(id) ?? session;
     const confirmedAt = new Date().toISOString();
     let webhook: Parameters<SessionStore["completeSession"]>[2];
     if (session.callback?.url) {
-      const payload = this.buildResultPayload(session, result, summary, confirmedAt, method);
+      const payload = this.buildResultPayload(
+        session,
+        result,
+        summary,
+        normalizedCapturedContext,
+        confirmedAt,
+        method,
+      );
       const payloadStr = JSON.stringify(payload);
       const eventId = `evt_${randomBytes(12).toString("hex")}`;
       const timestamp = new Date().toISOString();
@@ -534,9 +679,16 @@ export class SessionService {
     }
     const completed = this.store.completeSession(
       id,
-      { result, summary, humanConfirmation: { confirmedAt, method } },
+      {
+        result,
+        summary,
+        capturedContext: normalizedCapturedContext,
+        humanConfirmation: { confirmedAt, method, submissionId: resolvedSubmissionId },
+      },
       webhook,
+      { id: resolvedSubmissionId, payloadFingerprint },
     );
+    void this.closePhoneAttempts(id, "completed");
     void this.conversation.endRoom(id);
     return completed;
   }
@@ -566,7 +718,6 @@ export class SessionService {
     ];
     if (nonCancellable.includes(session.status)) return null;
     try {
-      const delivery = this.store.getChannelDelivery(id, "twilio");
       const updated = this.store.transitionWithEvent(
         id,
         session.status,
@@ -574,9 +725,7 @@ export class SessionService {
         "session.cancelled",
         reason ? { reason } : {},
       );
-      if (delivery?.externalId && this.telephony.cancel) {
-        void this.telephony.cancel(delivery.externalId);
-      }
+      void this.closePhoneAttempts(id, "canceled");
       void this.conversation.endRoom(id);
       return updated;
     } catch {
@@ -585,49 +734,264 @@ export class SessionService {
   }
 
   async getTelephonyDelivery(id: string) {
-    const delivery = this.store.getChannelDelivery(id, "twilio");
-    if (!delivery) return null;
-    let providerStatus: string | undefined;
-    let providerError: string | undefined;
-    if (delivery.status === "succeeded" && delivery.externalId && this.telephony.status) {
-      const result = await this.telephony.status(delivery.externalId);
-      providerStatus = result.status;
-      providerError = result.success ? undefined : result.error;
+    let attempt = this.store.latestPhoneAttempt(id);
+    if (!attempt) return null;
+    let providerStatus: string = attempt.status;
+    let providerError = attempt.error;
+    let answeredBy: string | undefined;
+    if (attempt.providerCallId && ACTIVE_ATTEMPT_STATUSES.has(attempt.status) && this.telephony.status) {
+      const result = await this.telephony.status(attempt.providerCallId);
+      providerStatus = result.status ?? attempt.status;
+      providerError = result.success ? attempt.error : result.error;
+      answeredBy = result.answeredBy;
+      const machine = answeredBy?.toLowerCase().startsWith("machine") === true;
+      if (machine && this.telephony.cancel) void this.telephony.cancel(attempt.providerCallId);
+      if (machine || TERMINAL_PHONE_STATUSES.has(providerStatus)) {
+        attempt = await this.finishPhoneAttempt(attempt, machine ? "machine" : providerStatus, providerError);
+      } else if (["queued", "ringing", "in-progress"].includes(providerStatus)) {
+        attempt = this.store.updatePhoneAttempt(attempt.id, {
+          status: providerStatus as PhoneAttemptStatus,
+        });
+        const session = this.store.getById(id);
+        if (session?.phoneRetry) {
+          this.store.update(id, {
+            phoneRetry: {
+              ...session.phoneRetry,
+              state: providerStatus === "in-progress" ? "in_call" : "dialing",
+            },
+          });
+        }
+      }
     }
-    const terminalFailure =
-      providerStatus && ["busy", "failed", "no-answer", "canceled"].includes(providerStatus);
-    const current = this.store.getById(id);
-    const endedWithoutDecision =
-      providerStatus === "completed" &&
-      current !== null &&
-      ["notified", "snoozed"].includes(current.status);
-    let endedSession = false;
-    if (terminalFailure || endedWithoutDecision) {
-      endedSession = Boolean(this.cancel(id, `Twilio call ${providerStatus}`));
-    }
+    const session = this.store.getById(id);
     return {
-      status: delivery.status,
+      status: attempt.status,
       provider_status: providerStatus,
-      error: delivery.error ?? providerError,
-      session_status: this.store.getById(id)?.status,
-      session_ended: endedSession,
+      answered_by: answeredBy,
+      error: providerError,
+      session_status: session?.status,
+      session_ended: false,
+      attempt_id: attempt.id,
+      attempt_count: this.store.listPhoneAttempts(id).length,
+      phone_retry: session?.phoneRetry,
     };
   }
 
   /** Reconcile open phone sessions even when no browser is polling their call status. */
   async reconcileTelephonyDeliveries(): Promise<number> {
-    const openStatuses = new Set(["notified", "snoozed", "joining", "active", "confirming"]);
     const candidates = this.store.list(100).filter((session) => {
-      if (!openStatuses.has(session.status)) return false;
-      const delivery = this.store.getChannelDelivery(session.id, "twilio");
-      return delivery?.status === "succeeded" && Boolean(delivery.externalId);
+      const attempt = this.store.latestPhoneAttempt(session.id);
+      return OPEN_SESSION_STATUSES.has(session.status) && Boolean(attempt?.providerCallId) &&
+        ACTIVE_ATTEMPT_STATUSES.has(attempt!.status);
     });
-    let ended = 0;
-    for (const session of candidates) {
-      const delivery = await this.getTelephonyDelivery(session.id);
-      if (delivery?.session_ended) ended += 1;
+    for (const session of candidates) await this.getTelephonyDelivery(session.id);
+    await this.processDuePhoneRetries();
+    return candidates.length;
+  }
+
+  async callAgain(id: string): Promise<ConferSession | null> {
+    this.expireDueSessions();
+    const session = this.store.getById(id);
+    if (!session || !OPEN_SESSION_STATUSES.has(session.status)) return null;
+    const phoneRetry = session.phoneRetry ?? this.phoneRetrySnapshot(session.participant.operatorId);
+    if (!session.phoneRetry) this.store.update(id, { phoneRetry });
+    const attempts = this.store.listPhoneAttempts(id);
+    if (attempts.some((attempt) => ACTIVE_ATTEMPT_STATUSES.has(attempt.status))) {
+      throw new Error("Call already in progress");
     }
-    return ended;
+    if (this.store.hasActivePhoneAttempt(session.participant.operatorId)) {
+      throw new Error("Another call is already in progress for this operator");
+    }
+    const replacedScheduled = attempts.some((attempt) => attempt.status === "scheduled");
+    this.store.supersedeScheduledPhoneAttempts(id);
+    const attempt = this.store.createPhoneAttempt({
+      id: `call_${randomBytes(12).toString("hex")}`,
+      sessionId: id,
+      operatorId: session.participant.operatorId,
+      trigger: "manual",
+      status: "dialing",
+      consumesAutomaticSlot: replacedScheduled,
+    });
+    if (replacedScheduled) {
+      this.store.update(id, {
+        phoneRetry: {
+          ...phoneRetry,
+          automaticCallbacksUsed: phoneRetry.automaticCallbacksUsed + 1,
+          nextRetryAt: undefined,
+          state: "dialing",
+        },
+      });
+    }
+    await this.dispatchPhoneAttempt(attempt);
+    return this.store.getById(id);
+  }
+
+  stopPhoneRetries(id: string): ConferSession | null {
+    const session = this.store.getById(id);
+    if (!session || !OPEN_SESSION_STATUSES.has(session.status)) return null;
+    this.store.supersedeScheduledPhoneAttempts(id);
+    const phoneRetry = session.phoneRetry ?? this.phoneRetrySnapshot(session.participant.operatorId);
+    const updated = this.store.update(id, {
+      phoneRetry: {
+        ...phoneRetry,
+        automaticStopped: true,
+        nextRetryAt: undefined,
+        state: "stopped",
+      },
+    });
+    this.store.addEvent(id, "session.phone_retries_stopped", {});
+    return updated;
+  }
+
+  /** Tear down paid voice resources while keeping the human decision open. */
+  async disconnectVoice(
+    id: string,
+    reason: "idle_timeout" | "max_duration" | "operator_request" = "operator_request",
+  ): Promise<ConferSession | null> {
+    const session = this.store.getById(id);
+    if (!session) return null;
+    await this.closePhoneAttempts(id, "canceled");
+    await this.conversation.endRoom(id);
+    this.store.addEvent(id, "session.voice_disconnected", { reason });
+    return this.store.getById(id);
+  }
+
+  async prepareBrowserJoin(id: string): Promise<void> {
+    const session = this.store.getById(id);
+    if (!session || !OPEN_SESSION_STATUSES.has(session.status)) return;
+    this.store.supersedeScheduledPhoneAttempts(id);
+    if (session?.phoneRetry) {
+      this.store.update(id, {
+        phoneRetry: {
+          ...session.phoneRetry,
+          automaticStopped: true,
+          state: "stopped",
+          nextRetryAt: undefined,
+        },
+      });
+    }
+    const attempt = this.store.latestPhoneAttempt(id);
+    if (attempt && ACTIVE_ATTEMPT_STATUSES.has(attempt.status)) {
+      if (attempt.providerCallId && this.telephony.cancel) await this.telephony.cancel(attempt.providerCallId);
+      this.store.updatePhoneAttempt(attempt.id, {
+        status: "canceled",
+        endedAt: new Date().toISOString(),
+      });
+      if (attempt.roomName) await this.conversation.endRoom(attempt.roomName);
+    }
+  }
+
+  async processDuePhoneRetries(): Promise<number> {
+    await this.recoverStalePhoneAttemptClaims();
+    const priority = { incident: 0, high: 1, normal: 2 } as const;
+    const due = this.store.listDuePhoneAttempts().sort((left, right) => {
+      const leftSession = this.store.getById(left.sessionId);
+      const rightSession = this.store.getById(right.sessionId);
+      const urgency = (priority[leftSession?.urgency ?? "normal"] ?? 2) -
+        (priority[rightSession?.urgency ?? "normal"] ?? 2);
+      return urgency || String(left.scheduledAt).localeCompare(String(right.scheduledAt));
+    });
+    let dispatched = 0;
+    for (const candidate of due) {
+      const session = this.store.getById(candidate.sessionId);
+      if (!session || !OPEN_SESSION_STATUSES.has(session.status) || session.humanConfirmation) {
+        this.store.updatePhoneAttempt(candidate.id, { status: "superseded", endedAt: new Date().toISOString() });
+        continue;
+      }
+      const retry = session.phoneRetry;
+      if (!retry || retry.automaticStopped || (retry.deadlineAt && Date.parse(retry.deadlineAt) <= Date.now())) {
+        this.store.updatePhoneAttempt(candidate.id, { status: "superseded", endedAt: new Date().toISOString() });
+        this.store.update(session.id, {
+          phoneRetry: {
+            ...(retry ?? this.phoneRetrySnapshot(session.participant.operatorId)),
+            state: retry?.automaticStopped ? "stopped" : "exhausted",
+            nextRetryAt: undefined,
+          },
+        });
+        continue;
+      }
+      const operator = this.config.operators[session.participant.operatorId];
+      if (
+        session.urgency !== "incident" &&
+        session.type !== "incident" &&
+        operator &&
+        isOperatorInQuietHours(operator.timezone, operator.quiet_hours)
+      ) {
+        const quietEnd = nextOperatorQuietHoursEnd(
+          operator.timezone,
+          operator.quiet_hours,
+          new Date(),
+        );
+        const stillWithinWindow = quietEnd &&
+          (!retry.deadlineAt || quietEnd.getTime() < Date.parse(retry.deadlineAt)) &&
+          (!session.expiresAt || quietEnd.getTime() < Date.parse(session.expiresAt));
+        if (stillWithinWindow) {
+          const scheduledAt = quietEnd.toISOString();
+          this.store.updatePhoneAttempt(candidate.id, { scheduledAt });
+          this.store.update(session.id, {
+            phoneRetry: {
+              ...retry,
+              state: "scheduled",
+              blockedReason: undefined,
+              nextRetryAt: scheduledAt,
+            },
+          });
+        } else {
+          this.store.updatePhoneAttempt(candidate.id, {
+            status: "superseded",
+            endedAt: new Date().toISOString(),
+          });
+          this.store.update(session.id, {
+            phoneRetry: {
+              ...retry,
+              state: "exhausted",
+              blockedReason: "quiet_hours",
+              nextRetryAt: undefined,
+            },
+          });
+        }
+        continue;
+      }
+      const claimed = this.store.claimPhoneAttempt(candidate.id);
+      if (!claimed) continue;
+      this.store.update(session.id, {
+        phoneRetry: {
+          ...retry,
+          state: "dialing",
+          nextRetryAt: undefined,
+          automaticCallbacksUsed: retry.automaticCallbacksUsed + (claimed.consumesAutomaticSlot ? 1 : 0),
+        },
+      });
+      await this.dispatchPhoneAttempt(claimed);
+      dispatched++;
+    }
+    return dispatched;
+  }
+
+  private async recoverStalePhoneAttemptClaims(): Promise<void> {
+    const claimedBefore = new Date(Date.now() - 60_000).toISOString();
+    for (const attempt of this.store.listStaleClaimedPhoneAttempts(claimedBefore)) {
+      const session = this.store.getById(attempt.sessionId);
+      if (!session || !OPEN_SESSION_STATUSES.has(session.status) || session.humanConfirmation) {
+        this.store.updatePhoneAttempt(attempt.id, {
+          status: "superseded",
+          endedAt: new Date().toISOString(),
+        });
+        continue;
+      }
+      const error = "Phone attempt was interrupted before provider placement completed";
+      const failed = this.store.updatePhoneAttempt(attempt.id, {
+        status: "failed",
+        retryable: true,
+        error,
+        endedAt: new Date().toISOString(),
+      });
+      if (failed.roomName) await this.conversation.endRoom(failed.roomName);
+      this.store.addEvent(attempt.sessionId, "session.phone_attempt_recovered", {
+        attempt_id: attempt.id,
+      });
+      await this.scheduleAfterAttempt(failed, "failed", true, error);
+    }
   }
 
   decline(id: string, reason?: string): ConferSession | null {
@@ -641,6 +1005,7 @@ export class SessionService {
         "session.declined",
         { reason },
       );
+      void this.closePhoneAttempts(id, "canceled");
       void this.conversation.endRoom(id);
       return updated;
     } catch {
@@ -652,6 +1017,7 @@ export class SessionService {
     session: ConferSession,
     result: Record<string, unknown>,
     summary: string | undefined,
+    capturedContext: CapturedContext,
     confirmedAt: string,
     method: "session_ui" | "text_form" | "voice_agent",
   ) {
@@ -661,6 +1027,7 @@ export class SessionService {
       completion_reason: "human_confirmed",
       summary: summary ?? "",
       result,
+      captured_context: capturedContext,
       continuation: session.continuation
         ? {
             run_id: session.continuation.runId,
@@ -726,44 +1093,93 @@ export class SessionService {
         lastFailure = result;
       }
     }
-    // When phone is selected, the secure link remains available for sharing but must not mask
-    // a failed primary phone delivery.
-    return phoneResult ?? lastSuccess ?? lastFailure ?? { success: false, channel: "none", error: "No notifier configured" };
+    // A phone setup/provider failure never closes the human decision. The inbox and
+    // signed join URL remain valid recovery paths.
+    if (lastSuccess) return lastSuccess;
+    if (phoneResult) {
+      return phoneResult.success
+        ? phoneResult
+        : { success: true, channel: "inbox", message: phoneResult.error };
+    }
+    return lastFailure ?? { success: false, channel: "none", error: "No notifier configured" };
   }
 
   private async dispatchTwilio(session: ConferSession): Promise<TelephonyCallResult> {
-    const claimed = this.store.claimChannelDelivery(session.id, "twilio");
-    if (!claimed) {
-      const existing = this.store.getChannelDelivery(session.id, "twilio");
-      if (existing?.status === "failed") {
-        return {
-          success: false,
-          channel: "twilio",
-          error: existing.error ?? "Twilio call previously failed",
-        };
-      }
+    const existingAttempt = this.store.listPhoneAttempts(session.id).find((attempt) => attempt.trigger === "initial");
+    if (existingAttempt) {
       return {
-        success: true,
+        success: existingAttempt.status !== "failed",
         channel: "twilio",
-        callId: existing?.externalId,
+        callId: existingAttempt.providerCallId,
+        error: existingAttempt.error,
         message: "Twilio call already dispatched",
       };
     }
 
+    this.store.claimChannelDelivery(session.id, "twilio");
+    if (this.store.hasActivePhoneAttempt(session.participant.operatorId)) {
+      const scheduledAt = new Date().toISOString();
+      this.store.createPhoneAttempt({
+        id: `call_${randomBytes(12).toString("hex")}`,
+        sessionId: session.id,
+        operatorId: session.participant.operatorId,
+        trigger: "initial",
+        status: "scheduled",
+        scheduledAt,
+      });
+      this.store.update(session.id, {
+        phoneRetry: {
+          ...(session.phoneRetry ?? this.phoneRetrySnapshot(session.participant.operatorId)),
+          state: "scheduled",
+          nextRetryAt: scheduledAt,
+        },
+      });
+      return { success: true, channel: "twilio", message: "Phone call queued behind another active call" };
+    }
+    const attempt = this.store.createPhoneAttempt({
+      id: `call_${randomBytes(12).toString("hex")}`,
+      sessionId: session.id,
+      operatorId: session.participant.operatorId,
+      trigger: "initial",
+      status: "dialing",
+    });
+    return this.dispatchPhoneAttempt(attempt);
+  }
+
+  private async dispatchPhoneAttempt(attempt: PhoneAttempt): Promise<TelephonyCallResult> {
+    const session = this.store.getById(attempt.sessionId);
+    if (!session || !OPEN_SESSION_STATUSES.has(session.status) && session.status !== "dispatching") {
+      this.store.updatePhoneAttempt(attempt.id, { status: "superseded", endedAt: new Date().toISOString() });
+      return { success: false, channel: "twilio", error: "Session is no longer open", retryable: false };
+    }
+    if (session.phoneRetry) {
+      this.store.update(session.id, {
+        phoneRetry: {
+          ...session.phoneRetry,
+          attemptCount: (session.phoneRetry.attemptCount ?? 0) + 1,
+          state: "dialing",
+        },
+      });
+    }
+
     let result: TelephonyCallResult;
+    let roomName: string | undefined;
     try {
       if (resolveSpeakingReady(this.config.conversation) !== "ready") {
         result = {
           success: false,
           channel: "twilio",
           error: "LiveKit speaking agent is not configured",
+          retryable: false,
         };
       } else {
         const readiness = await this.telephony.test?.();
         if (readiness && !readiness.ok) {
-          result = { success: false, channel: "twilio", error: readiness.message };
+          result = { success: false, channel: "twilio", error: readiness.message, retryable: false };
         } else {
-          const room = await this.conversation.createRoom(session);
+          roomName = `confer-${session.id}-call-${attempt.sequence}`;
+          const room = await this.conversation.createRoom(session, { roomName, surface: "phone" });
+          this.store.updatePhoneAttempt(attempt.id, { roomName });
           result = await this.telephony.call(session, room);
         }
       }
@@ -772,14 +1188,43 @@ export class SessionService {
         success: false,
         channel: "twilio",
         error: error instanceof Error ? error.message : "Twilio call failed",
+        retryable: true,
       };
     }
 
-    this.store.completeChannelDelivery(session.id, "twilio", {
-      success: result.success,
-      externalId: result.callId,
-      error: result.error,
-    });
+    if (attempt.trigger === "initial") {
+      this.store.completeChannelDelivery(session.id, "twilio", {
+        success: result.success,
+        externalId: result.callId,
+        error: result.error,
+      });
+    }
+    if (result.success) {
+      this.store.updatePhoneAttempt(attempt.id, {
+        status: "queued",
+        providerCallId: result.callId,
+        roomName,
+      });
+      const latest = this.store.getById(session.id);
+      if (latest?.phoneRetry) {
+        this.store.update(session.id, {
+          phoneRetry: {
+            ...latest.phoneRetry,
+            state: "dialing",
+          },
+        });
+      }
+    } else {
+      const failed = this.store.updatePhoneAttempt(attempt.id, {
+        status: "failed",
+        retryable: result.retryable ?? true,
+        error: result.error,
+        endedAt: new Date().toISOString(),
+        roomName,
+      });
+      if (roomName) void this.conversation.endRoom(roomName);
+      await this.scheduleAfterAttempt(failed, "failed", result.retryable ?? true, result.error);
+    }
     this.store.addEvent(
       session.id,
       result.success ? "session.channel_delivered" : "session.channel_failed",
@@ -787,8 +1232,139 @@ export class SessionService {
         channel: "twilio",
         ...(result.callId ? { external_id: result.callId } : {}),
         ...(result.error ? { error: result.error } : {}),
+        attempt_id: attempt.id,
       },
     );
     return result;
+  }
+
+  private async finishPhoneAttempt(
+    attempt: PhoneAttempt,
+    outcome: string,
+    error?: string,
+  ): Promise<PhoneAttempt> {
+    if (!ACTIVE_ATTEMPT_STATUSES.has(attempt.status)) return attempt;
+    const retryable = ["busy", "failed", "no-answer", "canceled", "completed", "machine"].includes(outcome);
+    const finished = this.store.updatePhoneAttempt(attempt.id, {
+      status: outcome as PhoneAttemptStatus,
+      retryable,
+      error,
+      endedAt: new Date().toISOString(),
+    });
+    if (finished.roomName) await this.conversation.endRoom(finished.roomName);
+    this.store.addEvent(attempt.sessionId, "session.phone_attempt_ended", {
+      attempt_id: attempt.id,
+      outcome,
+      retryable,
+    });
+    await this.scheduleAfterAttempt(finished, outcome, retryable, error);
+    return finished;
+  }
+
+  private async scheduleAfterAttempt(
+    attempt: PhoneAttempt,
+    outcome: string,
+    retryable: boolean,
+    error?: string,
+  ): Promise<void> {
+    const session = this.store.getById(attempt.sessionId);
+    if (
+      !session ||
+      (!OPEN_SESSION_STATUSES.has(session.status) && session.status !== "dispatching") ||
+      session.humanConfirmation
+    ) return;
+    let retry = session.phoneRetry ?? this.phoneRetrySnapshot(session.participant.operatorId);
+    const origin = retry.retryOriginAt ?? new Date().toISOString();
+    const deadline = retry.deadlineAt ??
+      (RETRY_WINDOW_MS[retry.policy]
+        ? new Date(Date.parse(origin) + RETRY_WINDOW_MS[retry.policy]).toISOString()
+        : undefined);
+    retry = { ...retry, retryOriginAt: origin, deadlineAt: deadline, lastOutcome: outcome };
+
+    if (!retryable) {
+      this.store.update(session.id, {
+        phoneRetry: { ...retry, state: "blocked", blockedReason: error ?? outcome, nextRetryAt: undefined },
+      });
+      return;
+    }
+    if (retry.automaticStopped || retry.policy === "never") {
+      this.store.update(session.id, {
+        phoneRetry: { ...retry, state: retry.policy === "never" ? "stopped" : retry.state, nextRetryAt: undefined },
+      });
+      return;
+    }
+    if (attempt.trigger === "manual" && !attempt.consumesAutomaticSlot) {
+      const automaticExhausted =
+        retry.automaticCallbacksUsed >= RETRY_OFFSETS_MS[retry.policy].length;
+      this.store.update(session.id, {
+        phoneRetry: {
+          ...retry,
+          state: retry.automaticStopped
+            ? "stopped"
+            : automaticExhausted
+              ? "exhausted"
+              : "idle",
+          nextRetryAt: undefined,
+        },
+      });
+      return;
+    }
+
+    const offsets = RETRY_OFFSETS_MS[retry.policy];
+    const offset = offsets[retry.automaticCallbacksUsed];
+    if (offset === undefined) {
+      this.store.update(session.id, {
+        phoneRetry: { ...retry, state: "exhausted", nextRetryAt: undefined },
+      });
+      return;
+    }
+    const nextAt = new Date(Date.parse(origin) + offset).toISOString();
+    if ((deadline && Date.parse(nextAt) > Date.parse(deadline)) || (session.expiresAt && Date.parse(nextAt) >= Date.parse(session.expiresAt))) {
+      this.store.update(session.id, {
+        phoneRetry: { ...retry, state: "exhausted", nextRetryAt: undefined },
+      });
+      return;
+    }
+    this.store.supersedeScheduledPhoneAttempts(session.id);
+    this.store.createPhoneAttempt({
+      id: `call_${randomBytes(12).toString("hex")}`,
+      sessionId: session.id,
+      operatorId: session.participant.operatorId,
+      trigger: "automatic",
+      status: "scheduled",
+      scheduledAt: nextAt,
+      consumesAutomaticSlot: true,
+    });
+    this.store.update(session.id, {
+      phoneRetry: { ...retry, state: "scheduled", nextRetryAt: nextAt },
+    });
+    this.store.addEvent(session.id, "session.phone_retry_scheduled", {
+      next_retry_at: nextAt,
+      callback_number: retry.automaticCallbacksUsed + 1,
+    });
+  }
+
+  private async closePhoneAttempts(sessionId: string, outcome: "completed" | "canceled"): Promise<void> {
+    const session = this.store.getById(sessionId);
+    if (session?.phoneRetry) {
+      this.store.update(sessionId, {
+        phoneRetry: {
+          ...session.phoneRetry,
+          state: "stopped",
+          automaticStopped: true,
+          nextRetryAt: undefined,
+        },
+      });
+    }
+    this.store.supersedeScheduledPhoneAttempts(sessionId);
+    for (const attempt of this.store.listPhoneAttempts(sessionId)) {
+      if (!ACTIVE_ATTEMPT_STATUSES.has(attempt.status)) continue;
+      if (attempt.providerCallId && this.telephony.cancel) await this.telephony.cancel(attempt.providerCallId);
+      this.store.updatePhoneAttempt(attempt.id, {
+        status: outcome,
+        endedAt: new Date().toISOString(),
+      });
+      if (attempt.roomName) await this.conversation.endRoom(attempt.roomName);
+    }
   }
 }

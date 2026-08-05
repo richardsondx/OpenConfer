@@ -12,6 +12,15 @@ export type ConnectResult = {
   configPath?: string;
 };
 
+type SkillHarness = "hermes" | "openclaw" | "claude-code" | "codex";
+
+const HARNESS_LABELS: Record<SkillHarness, string> = {
+  hermes: "Hermes",
+  openclaw: "OpenClaw",
+  "claude-code": "Claude Code",
+  codex: "Codex",
+};
+
 function getOpenConferConfig(): { baseUrl: string; token: string } {
   const configPath = process.env.OPENCONFER_CONFIG ?? join(homedir(), ".openconfer", "config.yaml");
   if (!existsSync(configPath)) {
@@ -131,6 +140,7 @@ openconfer session create --stdin --json <<JSON
   "estimated_duration_minutes": 3,
   "idempotency_key": "\${idempotency_key}"
 }
+
 JSON
 \`\`\`
 
@@ -147,6 +157,22 @@ openconfer session ack SESSION_ID --run-id RUN_ID --json
 
 For \`declined\`, \`expired\`, \`cancelled\`, \`failed\`, or \`policy_blocked\`, stop without acknowledging or inventing a decision. On any command or HTTP/configuration error, stop; do not edit a payload file or retry with a fresh key.
 `;
+}
+
+/** Build the same portable OpenConfer skill with harness-specific task identity. */
+export function generateHarnessSkillMarkdown(harness: SkillHarness, baseUrl: string): string {
+  const label = HARNESS_LABELS[harness];
+  let skill = generateHermesSkillMarkdown(baseUrl);
+  if (harness !== "hermes") {
+    skill = skill
+      .replaceAll("Hermes", label)
+      .replaceAll("hermes", harness)
+      .replaceAll("HERMES_RUN_ID", "OPENCONFER_RUN_ID");
+  }
+  if (!skill.startsWith("---\n")) {
+    skill = `---\nname: openconfer\ndescription: Use OpenConfer when work is blocked on a human decision, approval, or clarification.\n---\n\n${skill}`;
+  }
+  return skill;
 }
 
 function connectHermes(): ConnectResult {
@@ -168,7 +194,7 @@ function connectHermes(): ConnectResult {
   });
 
   mkdirSync(skillDir, { recursive: true });
-  const skill = generateHermesSkillMarkdown(baseUrl);
+  const skill = generateHarnessSkillMarkdown("hermes", baseUrl);
   writeFileSync(skillPath, skill, "utf8");
 
   // Also stash under OpenConfer home for the UI / recovery
@@ -194,56 +220,43 @@ function connectHermes(): ConnectResult {
   };
 }
 
-function connectOpenclaw(): ConnectResult {
-  const { baseUrl, token } = getOpenConferConfig();
-  const stashDir = join(homedir(), ".openconfer", "harness", "openclaw");
-  mkdirSync(stashDir, { recursive: true });
-  const configPath = join(stashDir, "openconfer.plugin.config.json");
-  const pluginConfig = {
-    baseUrl,
-    apiToken: token,
-    agentId: "openclaw",
-    operatorId: "me",
-    webhookPort: 8788,
-    callbackUrl: "http://127.0.0.1:8788/openconfer/events",
-  };
-  writeFileSync(configPath, `${JSON.stringify(pluginConfig, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-
-  const repoPlugin = [
-    process.env.OPENCONFER_SOURCE_DIR
-      ? join(process.env.OPENCONFER_SOURCE_DIR, "integrations/openclaw")
-      : "",
-    join(process.cwd(), "integrations/openclaw"),
-  ].find((p) => p && existsSync(join(p, "openclaw.plugin.json")));
-
-  const steps = [
-    `Wrote OpenClaw plugin config to ${configPath}`,
-  ];
-  if (repoPlugin) {
-    steps.push(
-      `From your OpenConfer checkout, run:`,
-      `  openclaw plugins install --link ${repoPlugin}`,
-      `  openclaw plugins enable openconfer`,
-      `  openclaw gateway restart`,
-      `Then paste the JSON from ${configPath} into plugins.entries.openconfer.config in openclaw.json`,
-    );
-  } else {
-    steps.push(
-      "Install the OpenConfer OpenClaw plugin from your OpenConfer checkout:",
-      "  openclaw plugins install --link ./integrations/openclaw",
-      "  openclaw plugins enable openconfer",
-      `Merge ${configPath} into plugins.entries.openconfer.config`,
-    );
-  }
-  steps.push("Start OpenConfer with OPENCONFER_ALLOW_LOCAL_CALLBACKS=1 for local webhooks.");
-
-  return { harness: "openclaw", configPath, steps };
+function skillPathFor(harness: Exclude<SkillHarness, "hermes">): string {
+  if (harness === "openclaw") return join(homedir(), ".openclaw", "skills", "openconfer", "SKILL.md");
+  if (harness === "claude-code") return join(homedir(), ".claude", "skills", "openconfer", "SKILL.md");
+  const codexHome = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  return join(codexHome, "skills", "openconfer", "SKILL.md");
 }
 
-const HARNESSES = ["hermes", "openclaw"] as const;
+function connectSkillHarness(harness: Exclude<SkillHarness, "hermes">): ConnectResult {
+  const { baseUrl, token } = getOpenConferConfig();
+  const skillPath = skillPathFor(harness);
+  const skill = generateHarnessSkillMarkdown(harness, baseUrl);
+  mkdirSync(dirname(skillPath), { recursive: true });
+  writeFileSync(skillPath, skill, "utf8");
+
+  const stashDir = join(homedir(), ".openconfer", "harness", harness);
+  mkdirSync(stashDir, { recursive: true });
+  writeFileSync(join(stashDir, "SKILL.md"), skill, "utf8");
+  writeFileSync(
+    join(stashDir, "env"),
+    `OPENCONFER_BASE_URL=${baseUrl}\nOPENCONFER_API_TOKEN=${token}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+
+  const label = HARNESS_LABELS[harness];
+  return {
+    harness,
+    skillPath,
+    steps: [
+      `Installed the OpenConfer skill for ${label} at ${skillPath}`,
+      `OpenConfer credentials remain in ${join(homedir(), ".openconfer", "config.yaml")}; the skill calls the configured CLI directly.`,
+      `Restart ${label} (or start a new session) so it discovers the skill.`,
+      "When the agent needs a human decision, a session appears in your OpenConfer inbox.",
+    ],
+  };
+}
+
+const HARNESSES = ["hermes", "openclaw", "claude-code", "codex"] as const;
 export type HarnessName = (typeof HARNESSES)[number];
 
 export function connectHarness(name: string): ConnectResult {
@@ -252,7 +265,7 @@ export function connectHarness(name: string): ConnectResult {
     throw new Error(`Unknown harness "${name}". Supported: ${HARNESSES.join(", ")}`);
   }
   if (harness === "hermes") return connectHermes();
-  return connectOpenclaw();
+  return connectSkillHarness(harness);
 }
 
 export function listHarnesses(): string[] {

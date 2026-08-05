@@ -104,6 +104,8 @@ export type SettingsView = {
     base_url: string;
     connect_command?: string;
     openclaw_connect_command?: string;
+    claude_code_connect_command?: string;
+    codex_connect_command?: string;
     skill_markdown?: string;
     skill_install_path?: string;
     env_export: string;

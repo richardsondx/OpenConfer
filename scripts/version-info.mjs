@@ -22,8 +22,7 @@ export function releaseVersionFromTag(tag) {
 export function getVersionInfo({ cwd = process.cwd(), env = process.env } = {}) {
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   const targetVersion = String(manifest.version);
-  const ciTag = env.GITHUB_REF_TYPE === "tag" ? env.GITHUB_REF_NAME : env.OPENCONFER_RELEASE_TAG;
-  const exactTag = ciTag || git(["describe", "--tags", "--exact-match", "--match", "v[0-9]*"], cwd);
+  const exactTag = env.GITHUB_REF_TYPE === "tag" ? env.GITHUB_REF_NAME : env.OPENCONFER_RELEASE_TAG;
   const taggedVersion = exactTag ? releaseVersionFromTag(exactTag) : null;
 
   if (exactTag && !taggedVersion) {
@@ -44,4 +43,3 @@ export function getVersionInfo({ cwd = process.cwd(), env = process.env } = {}) 
     channel: taggedVersion ? "release" : "development",
   };
 }
-

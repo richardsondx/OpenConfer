@@ -298,6 +298,32 @@ export function SettingsModal({
   const skillMarkdown =
     settings?.hermes.skill_markdown?.trim() ||
     (settings ? hermesSkillMarkdown(settings.server.base_url) : "");
+  const harnessSetups = [
+    {
+      name: "Hermes",
+      command: connectCommand,
+      path: skillInstallPath,
+      restart: "Restart Hermes (or start a new chat).",
+    },
+    {
+      name: "OpenClaw",
+      command: settings?.hermes.openclaw_connect_command ?? "openconfer connect openclaw",
+      path: "~/.openclaw/skills/openconfer/SKILL.md",
+      restart: "Restart OpenClaw (or start a new session).",
+    },
+    {
+      name: "Claude Code",
+      command: settings?.hermes.claude_code_connect_command ?? "openconfer connect claude-code",
+      path: "~/.claude/skills/openconfer/SKILL.md",
+      restart: "Restart Claude Code (or start a new session).",
+    },
+    {
+      name: "Codex",
+      command: settings?.hermes.codex_connect_command ?? "openconfer connect codex",
+      path: "~/.codex/skills/openconfer/SKILL.md",
+      restart: "Restart Codex (or start a new task).",
+    },
+  ];
 
   const copy = async (text: string, label: string) => {
     try {
@@ -618,57 +644,49 @@ export function SettingsModal({
                 Expand the harness your agent runs in, then run its connect command once on this Mac.
               </p>
 
-              <details className="settings-details harness-details" open>
-                <summary>Hermes</summary>
-                <div className="harness-panel">
-                  <p className="settings-lead">
-                    Run this <strong>once</strong> in any terminal on this Mac (where Hermes is installed).
-                    It updates <code className="inline-code">~/.hermes/.env</code> and installs the skill.
-                  </p>
-                  <div className="code-block">
-                    <pre>{connectCommand}</pre>
-                    <Button
-                      type="button"
-                      variant="primary"
-                      onClick={() => copy(connectCommand, "Hermes connect command")}
-                    >
-                      Copy command
-                    </Button>
-                  </div>
-                  <ol className="settings-steps">
-                    <li>Paste the command into Terminal and press Enter.</li>
-                    <li>Restart Hermes (or start a new chat).</li>
-                    <li>When Hermes needs you, a session shows up here.</li>
-                  </ol>
-                  <details className="settings-details">
-                    <summary>Manual env (if you cannot run connect)</summary>
+              {harnessSetups.map((harness, index) => (
+                <details className="settings-details harness-details" open={index === 0} key={harness.name}>
+                  <summary>{harness.name}</summary>
+                  <div className="harness-panel">
+                    <p className="settings-lead">
+                      Run this <strong>once</strong> in any terminal on this Mac. It installs the
+                      OpenConfer skill at <code className="inline-code">{harness.path}</code>.
+                    </p>
                     <div className="code-block">
-                      <pre>{hermesEnv}</pre>
-                      <Button type="button" variant="ghost" onClick={() => copy(hermesEnv, "manual env")}>
-                        Copy manual env
+                      <pre>{harness.command}</pre>
+                      <Button
+                        type="button"
+                        variant="primary"
+                        onClick={() => copy(harness.command, `${harness.name} connect command`)}
+                      >
+                        Copy command
                       </Button>
                     </div>
-                  </details>
-                </div>
-              </details>
-
-              <details className="settings-details harness-details">
-                <summary>
-                  OpenClaw <Badge variant="default">Coming soon</Badge>
-                </summary>
-                <div className="harness-panel">
-                  <p className="settings-lead">
-                    OpenClaw connect is not available yet. Use Hermes for now, or install the skill below
-                    in any harness that supports skills.
-                  </p>
-                </div>
-              </details>
+                    <ol className="settings-steps">
+                      <li>Paste the command into Terminal and press Enter.</li>
+                      <li>{harness.restart}</li>
+                      <li>When the agent needs you, a session shows up here.</li>
+                    </ol>
+                    {harness.name === "Hermes" && (
+                      <details className="settings-details">
+                        <summary>Manual env (if you cannot run connect)</summary>
+                        <div className="code-block">
+                          <pre>{hermesEnv}</pre>
+                          <Button type="button" variant="ghost" onClick={() => copy(hermesEnv, "manual env")}>
+                            Copy manual env
+                          </Button>
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                </details>
+              ))}
 
               <h3>
                 Skill preview{" "}
                 <Tip label="What is a skill?">
                   A short instruction file any agent harness can read so it knows how to call OpenConfer.
-                  Hermes install path: {skillInstallPath}.
+                  The connect command installs it in the selected harness's personal skills folder.
                 </Tip>
               </h3>
               <div className="skill-preview">
@@ -729,8 +747,8 @@ export function SettingsModal({
                 </Button>
               </div>
               <p className="settings-hint">
-                Generate creates a new key, saves it to config, updates this browser, and copies a ready
-                agent env block.
+                This replaces the current key. Existing agents will stop connecting until you update
+                them with the copied environment variables.
               </p>
             </div>
           )}

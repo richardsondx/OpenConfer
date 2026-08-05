@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { generateHermesSkillMarkdown } from "./connect.js";
+import { generateHarnessSkillMarkdown, generateHermesSkillMarkdown, listHarnesses } from "./connect.js";
 
 describe("generateHermesSkillMarkdown", () => {
   it("injects the base URL and requires direct CLI input without file edits", () => {
@@ -18,5 +18,19 @@ describe("generateHermesSkillMarkdown", () => {
     assert.match(skill, /Keep that ID and `run_id`\s+in the agent's task state, not in a file/);
     assert.doesNotMatch(skill, /cat >|session_file|state_dir|session create --file/);
     assert.doesNotMatch(skill, /See `examples\/decision-session\/session\.json`/);
+  });
+});
+
+describe("harness skill setup", () => {
+  it("supports OpenClaw, Claude Code, and Codex with harness-specific skills", () => {
+    assert.deepEqual(listHarnesses(), ["hermes", "openclaw", "claude-code", "codex"]);
+
+    for (const harness of ["openclaw", "claude-code", "codex"] as const) {
+      const skill = generateHarnessSkillMarkdown(harness, "https://confer.example.test");
+      assert.match(skill, /^---\nname: openconfer\n/);
+      assert.match(skill, new RegExp(`openconfer connect ${harness}`));
+      assert.match(skill, new RegExp(`"harness": "${harness}"`));
+      assert.doesNotMatch(skill, /HERMES_RUN_ID/);
+    }
   });
 });

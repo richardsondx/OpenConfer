@@ -146,6 +146,8 @@ export type SettingsView = {
     base_url: string;
     connect_command: string;
     openclaw_connect_command: string;
+    claude_code_connect_command: string;
+    codex_connect_command: string;
     skill_markdown: string;
     skill_install_path: string;
     env_export: string;
@@ -479,6 +481,8 @@ export async function toSettingsView(config: OpenConferConfig): Promise<Settings
       base_url: config.server.base_url,
       connect_command: "openconfer connect hermes",
       openclaw_connect_command: "openconfer connect openclaw",
+      claude_code_connect_command: "openconfer connect claude-code",
+      codex_connect_command: "openconfer connect codex",
       skill_markdown: buildHermesSkillMarkdown(config.server.base_url),
       skill_install_path: "~/.hermes/skills/openconfer/SKILL.md",
       env_export: [

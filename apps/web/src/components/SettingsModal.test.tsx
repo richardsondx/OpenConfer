@@ -123,6 +123,75 @@ describe("SettingsModal app version", () => {
   });
 });
 
+describe("SettingsModal agent setup", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("offers skill-based connect commands for every supported agent", async () => {
+    const current = settings();
+    current.hermes = {
+      ...current.hermes,
+      connect_command: "openconfer connect hermes",
+      openclaw_connect_command: "openconfer connect openclaw",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify(current), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    render(<SettingsModal token="oc_test" open initialSection="connect" onClose={() => undefined} />);
+
+    expect(await screen.findByText("OpenClaw", { selector: "summary" })).toBeInTheDocument();
+    expect(screen.getByText("Claude Code", { selector: "summary" })).toBeInTheDocument();
+    expect(screen.getByText("Codex", { selector: "summary" })).toBeInTheDocument();
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
+
+    for (const command of [
+      "openconfer connect hermes",
+      "openconfer connect openclaw",
+      "openconfer connect claude-code",
+      "openconfer connect codex",
+    ]) {
+      expect(screen.getByText(command)).toBeInTheDocument();
+    }
+  });
+});
+
+describe("SettingsModal access key", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("explains the consequence of replacing the current key", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify(settings()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    render(
+      <SettingsModal
+        token="oc_test"
+        open
+        initialSection="access"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        "This replaces the current key. Existing agents will stop connecting until you update them with the copied environment variables.",
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("SettingsModal sandbox test call", () => {
   afterEach(() => vi.unstubAllGlobals());
 

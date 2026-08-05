@@ -202,8 +202,8 @@ program
 
 program
   .command("connect")
-  .description("Connect a harness (Hermes, OpenClaw) to this OpenConfer instance")
-  .argument("[harness]", "harness name: hermes | openclaw", "hermes")
+  .description("Connect an agent harness to this OpenConfer instance")
+  .argument("[harness]", "harness name: hermes | openclaw | claude-code | codex", "hermes")
   .option("--list", "List supported harnesses")
   .action(async (harness: string, opts: { list?: boolean }) => {
     const { connectHarness, listHarnesses } = await import("./connect.js");

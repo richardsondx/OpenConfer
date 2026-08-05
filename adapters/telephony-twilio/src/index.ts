@@ -156,6 +156,31 @@ export function createTwilioTelephonyAdapter(
         };
       }
     },
+    async cancel(callId) {
+      if (!config.accountSid || !config.authToken) {
+        return { success: false, error: "Twilio credentials are not configured" };
+      }
+      try {
+        const response = await (dependencies.fetch ?? fetch)(
+          `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}/Calls/${encodeURIComponent(callId)}.json`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Basic ${Buffer.from(`${config.accountSid}:${config.authToken}`).toString("base64")}`,
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams({ Status: "canceled" }),
+          },
+        );
+        if (!response.ok) throw new Error(await responseError(response));
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Could not cancel the Twilio call",
+        };
+      }
+    },
     async test() {
       const missing = missingConfiguration(config);
       return missing.length === 0

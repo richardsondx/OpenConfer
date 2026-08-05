@@ -118,18 +118,21 @@ function PhoneCallFeedback({
   delivery,
   destination,
   onRetry,
+  onCancel,
   onOpenSettings,
   onDismiss,
 }: {
   delivery: PhoneDelivery & { sessionId?: string };
   destination?: string;
   onRetry: () => void;
+  onCancel: () => void;
   onOpenSettings: () => void;
   onDismiss: () => void;
 }) {
   const status = normalizedPhoneStatus(delivery);
   const failed = ["busy", "failed", "no-answer", "canceled"].includes(status);
-  const showSettings = failed || status === "completed";
+  const showSettings = status === "failed";
+  const canCancel = Boolean(delivery.sessionId) && !isFinalPhoneStatus(status);
   const destinationHint = destination ? ` ending in ${destination.slice(-4)}` : "";
   const copy = status === "starting"
     ? { title: "Starting your test call", detail: "Connecting to Twilio…" }
@@ -176,6 +179,7 @@ function PhoneCallFeedback({
         <span>{copy.detail}</span>
       </div>
       <div className="phone-call-feedback-actions">
+        {canCancel && <Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button>}
         {failed && <Button type="button" onClick={onRetry}>Try again</Button>}
         {showSettings && <Button type="button" variant="secondary" onClick={onOpenSettings}>Check phone settings</Button>}
         <Button type="button" variant="ghost" onClick={onDismiss} aria-label="Dismiss call status">Dismiss</Button>
@@ -553,6 +557,7 @@ export function InboxPage() {
 
   const startTestCall = async (useCase: DemoUseCase = "decision") => {
     if (!token) return;
+    if (phonePrimary && !window.confirm("Place a test call to your configured phone now?")) return;
     if (!voiceReady) {
       openSettings("voice");
       return;
@@ -582,6 +587,18 @@ export function InboxPage() {
       else setError(message);
     } finally {
       setTestCallBusy(false);
+    }
+  };
+
+  const cancelTestCall = async () => {
+    if (!token || !phoneCallFeedback?.sessionId) return;
+    const sessionId = phoneCallFeedback.sessionId;
+    setPhoneCallFeedback({ ...phoneCallFeedback, provider_status: "canceled", session_ended: true });
+    try {
+      await cancelSession(token, sessionId);
+      await loadSessions({ quiet: true });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not cancel the test call.");
     }
   };
 
@@ -681,6 +698,7 @@ export function InboxPage() {
           delivery={phoneCallFeedback}
           destination={settings?.telephony.twilio.destination_number}
           onRetry={() => void startTestCall(lastTestUseCase)}
+          onCancel={() => void cancelTestCall()}
           onOpenSettings={() => openSettings("alerts")}
           onDismiss={() => setPhoneCallFeedback(null)}
         />
@@ -754,7 +772,7 @@ export function InboxPage() {
                 key={s.id}
                 className={`session-row session-row--${outcome.tone}${isRinging ? " is-ringing" : ""}`}
               >
-                {s.join_url && !phonePrimary ? (
+                {s.join_url ? (
                   <Link
                     to={joinPathFromUrl(s.join_url, { autoJoin: open })}
                     className="session-row-link"
@@ -775,11 +793,27 @@ export function InboxPage() {
                   {s.join_url && (
                     <Button
                       type="button"
-                      variant="secondary"
+                      variant="ghost"
+                      className={`session-copy-link${copiedLinkId === s.id ? " is-copied" : ""}`}
                       onClick={() => void copyJoinLink(s)}
-                      aria-label={`Copy secure link for ${s.objective}`}
+                      aria-label={copiedLinkId === s.id
+                        ? `Copy secure link for ${s.objective} — copied`
+                        : `Copy secure link for ${s.objective}`}
+                      title={copiedLinkId === s.id ? "Copied" : "Copy link"}
                     >
-                      {copiedLinkId === s.id ? "Copied ✓" : "Copy link"}
+                      {copiedLinkId === s.id ? (
+                        <>
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="m5 12 4 4L19 6" />
+                          </svg>
+                          <span className="sr-only">Copied</span>
+                        </>
+                      ) : (
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="8" y="8" width="11" height="11" rx="2" />
+                          <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+                        </svg>
+                      )}
                     </Button>
                   )}
                   {open && (

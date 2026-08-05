@@ -148,11 +148,30 @@ describe("InboxPage", () => {
   beforeEach(() => {
     sessionStorage.clear();
     localStorage.clear();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText: vi.fn(async () => undefined) },
     });
     stubFetch([]);
+  });
+
+  it("requires confirmation before placing a phone test call", async () => {
+    vi.mocked(window.confirm).mockReturnValue(false);
+    stubFetch([waitingSession], phoneSettingsPayload);
+    sessionStorage.setItem("oc_token", "oc_test_token");
+
+    render(
+      <MemoryRouter>
+        <InboxPage />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("button", { name: /phone calls enabled/i });
+    fireEvent.click(screen.getByRole("button", { name: /^test call$/i }));
+
+    expect(window.confirm).toHaveBeenCalledWith("Place a test call to your configured phone now?");
+    expect(fetch).not.toHaveBeenCalledWith("/v1/sessions/demo", expect.anything());
   });
 
   it("shows token gate guidance, then get-started and settings", async () => {
@@ -201,15 +220,20 @@ describe("InboxPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /connect agent/i })).toBeInTheDocument();
     });
-    const hermesToggle = Array.from(dialog.querySelectorAll("summary")).find((el) =>
+    const summaries = Array.from(dialog.querySelectorAll("summary"));
+    const hermesToggle = summaries.find((el) =>
       /^hermes$/i.test(el.textContent?.trim() ?? ""),
     );
-    const openclawToggle = Array.from(dialog.querySelectorAll("summary")).find((el) =>
+    const openclawToggle = summaries.find((el) =>
       /openclaw/i.test(el.textContent ?? ""),
     );
     expect(hermesToggle).toBeTruthy();
     expect(openclawToggle).toBeTruthy();
-    expect(openclawToggle?.textContent).toMatch(/coming soon/i);
+    expect(openclawToggle?.textContent).not.toMatch(/coming soon/i);
+    expect(
+      summaries.some((summary) => summary.textContent?.trim() === "Claude Code"),
+    ).toBe(true);
+    expect(summaries.some((summary) => summary.textContent?.trim() === "Codex")).toBe(true);
     expect(screen.getByRole("heading", { name: /skill preview/i })).toBeInTheDocument();
   });
 
@@ -305,7 +329,10 @@ describe("InboxPage", () => {
 
     expect(await screen.findByRole("button", { name: /phone calls enabled/i })).toHaveClass("is-enabled");
     expect(screen.queryByRole("button", { name: /^answer$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /choose the launch window/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /choose the launch window/i })).toHaveAttribute(
+      "href",
+      "/join/ses_waiting1?autojoin=1#token=x",
+    );
     expect(screen.getByRole("button", { name: /copy secure link for.*choose the launch window/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^test call$/i }));
@@ -338,6 +365,7 @@ describe("InboxPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /^test call$/i }));
 
     expect(await screen.findByText(/session ended automatically/i, {}, { timeout: 3_000 })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /check phone settings/i })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/^cancelled$/i)).toBeInTheDocument());
   });
 

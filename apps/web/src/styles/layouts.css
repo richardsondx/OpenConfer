@@ -1042,6 +1042,27 @@
   flex-shrink: 0;
 }
 
+.session-copy-link.btn {
+  width: 36px;
+  min-height: 36px;
+  padding: 0;
+  color: var(--oc-text-muted);
+}
+
+.session-copy-link svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-copy-link.is-copied {
+  color: var(--oc-success);
+}
+
 .session-row-link {
   flex: 1;
   min-width: 0;
@@ -1222,4 +1243,5 @@
   .session-row { flex-direction: column; }
   .session-row-aside { width: 100%; flex-direction: row; align-items: center; }
   .session-row-aside .btn { flex: 1; }
+  .session-row-aside .session-copy-link { flex: 0 0 36px; }
 }

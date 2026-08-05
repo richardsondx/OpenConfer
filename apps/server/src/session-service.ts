@@ -566,6 +566,7 @@ export class SessionService {
     ];
     if (nonCancellable.includes(session.status)) return null;
     try {
+      const delivery = this.store.getChannelDelivery(id, "twilio");
       const updated = this.store.transitionWithEvent(
         id,
         session.status,
@@ -573,6 +574,9 @@ export class SessionService {
         "session.cancelled",
         reason ? { reason } : {},
       );
+      if (delivery?.externalId && this.telephony.cancel) {
+        void this.telephony.cancel(delivery.externalId);
+      }
       void this.conversation.endRoom(id);
       return updated;
     } catch {

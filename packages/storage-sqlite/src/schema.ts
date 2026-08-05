@@ -3,6 +3,7 @@ import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),
   type: text("type").notNull(),
+  locale: text("locale").notNull().default("en"),
   status: text("status").notNull(),
   initiatorJson: text("initiator_json").notNull(),
   participantJson: text("participant_json").notNull(),

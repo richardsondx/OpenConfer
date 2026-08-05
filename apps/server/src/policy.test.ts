@@ -9,6 +9,7 @@ describe("policy engine", () => {
     const result = evaluatePolicy(
       {
         type: "decision",
+        locale: "en",
         initiator: { agent_id: "a", harness: "h" },
         participant: { operator_id: "me" },
         objective: "",
@@ -26,6 +27,7 @@ describe("policy engine", () => {
     const result = evaluatePolicy(
       {
         type: "decision",
+        locale: "en",
         initiator: { agent_id: "a", harness: "h" },
         participant: { operator_id: "me" },
         objective: "Choose transport",

@@ -129,6 +129,7 @@ export class SessionService {
       const blocked: ConferSession = {
         id: generateSessionId(),
         type: input.type,
+        locale: input.locale,
         status: "policy_blocked",
         initiator: {
           agentId: input.initiator.agent_id,
@@ -181,6 +182,7 @@ export class SessionService {
       const blocked: ConferSession = {
         id: generateSessionId(),
         type: input.type,
+        locale: input.locale,
         status: "policy_blocked",
         initiator: {
           agentId: input.initiator.agent_id,
@@ -234,6 +236,7 @@ export class SessionService {
     const session: ConferSession = {
       id,
       type: input.type,
+      locale: input.locale,
       status: "created",
       initiator: {
         agentId: input.initiator.agent_id,

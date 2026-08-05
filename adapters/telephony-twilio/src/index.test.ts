@@ -5,6 +5,7 @@ import { createTwilioTelephonyAdapter } from "./index.js";
 const session: ConferSession = {
   id: "ses_twilio",
   type: "decision",
+  locale: "en",
   status: "dispatching",
   initiator: { agentId: "agent", harness: "test" },
   participant: { operatorId: "me", callName: "Richardson" },

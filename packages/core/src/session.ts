@@ -108,6 +108,8 @@ export interface SessionCallback {
 export interface ConferSession {
   id: string;
   type: SessionType;
+  /** BCP 47 locale selected by the initiating agent; defaults to English. */
+  locale: string;
   status: SessionState;
   initiator: SessionInitiator;
   participant: SessionParticipant;

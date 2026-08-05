@@ -6,6 +6,7 @@ import type { ConferSession } from "@openconfer/core";
 const mockSession: ConferSession = {
   id: "ses_test",
   type: "decision",
+  locale: "en",
   status: "notified",
   initiator: { agentId: "test", harness: "test" },
   participant: { operatorId: "me" },

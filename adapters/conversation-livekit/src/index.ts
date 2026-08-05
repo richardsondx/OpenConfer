@@ -14,6 +14,7 @@ function sessionMetadata(session: Parameters<ConversationAdapter["createRoom"]>[
   return JSON.stringify({
     sessionId: session.id,
     type: session.type,
+    locale: session.locale,
     initiator: session.initiator,
     operator: { preferredName: session.participant.callName },
     objective: session.objective,

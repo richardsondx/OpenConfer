@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   applySpeakingPreset,
   ConfigSchema,
+  CreateSessionSchema,
   normalizeSpeakingFields,
   resolveSpeakingReady,
   validateResultAgainstSchema,
@@ -14,6 +15,19 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "../../../");
 const approval = JSON.parse(readFileSync(join(root, "examples/approval-checkpoint/session.json"), "utf8"));
 const standup = JSON.parse(readFileSync(join(root, "examples/daily-standup/session.json"), "utf8"));
 const decision = JSON.parse(readFileSync(join(root, "examples/decision-session/session.json"), "utf8"));
+
+describe("CreateSessionSchema locale", () => {
+  it("defaults to English and canonicalizes an agent-supplied BCP 47 locale", () => {
+    expect(CreateSessionSchema.parse(decision).locale).toBe("en");
+    expect(CreateSessionSchema.parse({ ...decision, locale: "it-it" }).locale).toBe("it-IT");
+  });
+
+  it("rejects invalid locales", () => {
+    expect(CreateSessionSchema.safeParse({ ...decision, locale: "not_a_locale" }).success).toBe(
+      false,
+    );
+  });
+});
 
 describe("validateResultAgainstSchema", () => {
   const schema = {

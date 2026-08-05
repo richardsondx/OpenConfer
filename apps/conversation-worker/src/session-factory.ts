@@ -63,16 +63,18 @@ export function speakingWorkerEnabled(config: SpeakingWorkerEnv): boolean {
   return sttOk && llmOk && ttsOk;
 }
 
-async function buildStt(config: SpeakingWorkerEnv) {
+async function buildStt(config: SpeakingWorkerEnv, locale: string) {
   if (config.sttProvider === "openai") {
     return new openai.STT({
       model: config.sttModel || "gpt-4o-mini-transcribe",
+      language: locale,
       apiKey: config.sttApiKey || config.openaiApiKey,
     });
   }
   const deepgram = await import("@livekit/agents-plugin-deepgram");
   return new deepgram.STT({
     model: config.sttModel || "nova-3",
+    language: locale,
     apiKey: config.sttApiKey,
   });
 }
@@ -126,6 +128,7 @@ async function buildTts(config: SpeakingWorkerEnv) {
 /** Build a LiveKit AgentSession for realtime or STT→LLM→TTS pipeline. */
 export async function createAgentSession(
   config: SpeakingWorkerEnv = readSpeakingWorkerEnv(),
+  locale = "en",
 ): Promise<voice.AgentSession> {
   if (config.speakingMode === "realtime") {
     // Realtime only needs the OpenAI plugin — keep pipeline plugins lazy so a
@@ -134,13 +137,14 @@ export async function createAgentSession(
       llm: new openai.realtime.RealtimeModel({
         model: config.realtimeModel,
         voice: config.realtimeVoice,
+        inputAudioTranscription: { model: "gpt-4o-mini-transcribe", language: locale },
         ...(config.openaiApiKey ? { apiKey: config.openaiApiKey } : {}),
       }),
     });
   }
 
   return new voice.AgentSession({
-    stt: await buildStt(config),
+    stt: await buildStt(config, locale),
     llm: buildLlm(config),
     tts: await buildTts(config),
   });

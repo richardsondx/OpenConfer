@@ -44,8 +44,24 @@ export const CallbackSchema = z.object({
   secret: z.string().min(16).optional(),
 });
 
+export const SessionLocaleSchema = z
+  .string()
+  .trim()
+  .min(2)
+  .max(100)
+  .refine((value) => {
+    try {
+      Intl.getCanonicalLocales(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }, "Must be a valid BCP 47 locale")
+  .transform((value) => Intl.getCanonicalLocales(value)[0]!);
+
 export const CreateSessionSchema = z.object({
   type: z.enum(["decision", "approval", "briefing", "incident"]).default("decision"),
+  locale: SessionLocaleSchema.default("en"),
   initiator: InitiatorSchema,
   participant: ParticipantSchema,
   objective: z.string().min(1),

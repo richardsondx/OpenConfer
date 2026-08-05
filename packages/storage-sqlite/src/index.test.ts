@@ -11,6 +11,7 @@ function session(status: ConferSession["status"] = "created", expiresAt?: string
   return {
     id: generateSessionId(),
     type: "decision",
+    locale: "en",
     status,
     initiator: { agentId: "a", harness: "h" },
     participant: { operatorId: "me" },
@@ -42,6 +43,7 @@ describe("SessionStore", () => {
     const item = session();
     store.insert(item);
     expect(store.getById(item.id)?.objective).toBe("Test");
+    expect(store.getById(item.id)?.locale).toBe("en");
   });
 
   it("persists unique idempotency keys and request fingerprints", () => {

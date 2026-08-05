@@ -13,6 +13,7 @@ import {
 
 const baseInput = {
   type: "decision" as const,
+  locale: "en",
   initiator: { agent_id: "svc-test", harness: "vitest" },
   participant: { operator_id: "me" },
   objective: "Approve deployment",
@@ -257,6 +258,7 @@ describe("SessionService lifecycle and idempotency", () => {
       {
         id: "ses_stuck_created",
         type: "decision",
+        locale: "en",
         status: "created",
         initiator: { agentId: "svc-test", harness: "vitest" },
         participant: { operatorId: "me" },
@@ -281,6 +283,7 @@ describe("SessionService lifecycle and idempotency", () => {
       {
         id: "ses_stuck_dispatch",
         type: "decision",
+        locale: "en",
         status: "dispatching",
         initiator: { agentId: "svc-test", harness: "vitest" },
         participant: { operatorId: "me" },

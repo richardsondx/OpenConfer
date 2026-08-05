@@ -59,6 +59,7 @@ describe("webhook delivery security", () => {
     store.insert({
       id: sessionId,
       type: "decision",
+      locale: "en",
       status: "completed",
       initiator: { agentId: "a", harness: "h" },
       participant: { operatorId: "me" },

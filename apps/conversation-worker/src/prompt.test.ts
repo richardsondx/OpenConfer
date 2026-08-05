@@ -14,14 +14,22 @@ describe("voice facilitator prompt", () => {
     expect(prompt).toContain("do not repeat a fixed script");
   });
 
-  it("keeps the conversation in English unless the operator explicitly requests a switch", () => {
+  it("defaults to English unless the operator explicitly requests a switch", () => {
     const prompt = instructionsFor({
       operator: { preferredName: "Sofía" },
       objective: "Review the decisión text in the supplied context",
     });
 
-    expect(prompt).toContain("Speak in English by default and continue in English");
+    expect(prompt).toContain("Conduct the entire call in the session locale (en)");
+    expect(prompt).toContain("Session locale (BCP 47): en");
     expect(prompt).toContain("only when the operator clearly asks you to");
     expect(prompt).toContain("speech-transcription artifact is not a request to switch languages");
+  });
+
+  it("uses the locale selected by the initiating agent", () => {
+    const prompt = instructionsFor({ locale: "it-IT", objective: "Scegliere la cena" });
+
+    expect(prompt).toContain("Conduct the entire call in the session locale (it-IT)");
+    expect(prompt).toContain("Session locale (BCP 47): it-IT");
   });
 });

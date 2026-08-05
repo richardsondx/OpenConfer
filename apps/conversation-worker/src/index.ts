@@ -112,8 +112,9 @@ const agent = defineAgent({
   entry: async (ctx: JobContext) => {
     const metadata = parseMetadata(ctx.job.metadata);
     const sessionId = metadata.sessionId;
+    const locale = metadata.locale ?? "en";
     const speaking = readSpeakingWorkerEnv();
-    const session = await createAgentSession(speaking);
+    const session = await createAgentSession(speaking, locale);
 
     const resultParams = {
       result_json: z
@@ -171,7 +172,7 @@ const agent = defineAgent({
     });
     await session.generateReply({
       instructions:
-        "Open the call now in English with only a short, warm greeting. Use the operator's preferred name when provided, then stop and wait for their response. Do not state the objective or options yet.",
+        `Open the call now in the session locale (${locale}) with only a short, warm greeting. Use the operator's preferred name when provided, then stop and wait for their response. Do not state the objective or options yet.`,
     });
   },
 });

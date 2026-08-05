@@ -27,6 +27,7 @@ const { createLiveKitAdapter } = await import("./index.js");
 const session: ConferSession = {
   id: "ses_dispatch",
   type: "decision",
+  locale: "it-IT",
   status: "joining",
   initiator: { agentId: "agent", harness: "test" },
   participant: { operatorId: "me", callName: "Richardson" },
@@ -74,6 +75,7 @@ describe("LiveKit adapter dispatch", () => {
     );
     const metadata = JSON.parse(createRoom.mock.calls[0]![0].metadata);
     expect(metadata.operator.preferredName).toBe("Richardson");
+    expect(metadata.locale).toBe("it-IT");
   });
 
   it("still returns room credentials when createRoom fails", async () => {

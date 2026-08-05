@@ -28,6 +28,7 @@ function migrate(sqlite: Database.Database): void {
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
+      locale TEXT NOT NULL DEFAULT 'en',
       status TEXT NOT NULL,
       initiator_json TEXT NOT NULL,
       participant_json TEXT NOT NULL,
@@ -121,12 +122,16 @@ function migrate(sqlite: Database.Database): void {
   if (!sessionColumns.has("operator_seen_at")) {
     sqlite.exec("ALTER TABLE sessions ADD COLUMN operator_seen_at TEXT");
   }
+  if (!sessionColumns.has("locale")) {
+    sqlite.exec("ALTER TABLE sessions ADD COLUMN locale TEXT NOT NULL DEFAULT 'en'");
+  }
 }
 
 function rowToSession(row: typeof sessions.$inferSelect): ConferSession {
   return {
     id: row.id,
     type: row.type as SessionType,
+    locale: row.locale || "en",
     status: row.status as SessionState,
     initiator: JSON.parse(row.initiatorJson),
     participant: JSON.parse(row.participantJson),
@@ -160,6 +165,7 @@ export class SessionStore {
     this.db.insert(sessions).values({
       id: session.id,
       type: session.type,
+      locale: session.locale,
       status: session.status,
       initiatorJson: JSON.stringify(session.initiator),
       participantJson: JSON.stringify(session.participant),

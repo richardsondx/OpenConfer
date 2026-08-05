@@ -30,6 +30,7 @@ export type OperatorAlertsView = {
   sound: boolean;
   browser_notifications: boolean;
   snooze_minutes: number;
+  phone_retry_policy?: "never" | "brief" | "persistent";
 };
 
 export type SettingsView = {
@@ -180,14 +181,21 @@ JSON
 
 ## Deterministic lifecycle
 
-Keep the returned ID in agent task state, not a file. Wait, read only after a
-completed status, verify/apply the structured result, and acknowledge only after
-applying it:
+Keep the returned ID in agent task state, not a file. Wait and read only after a
+completed status. Consume the complete response packet before acknowledging it:
+
+- Apply \`result\` only to the original blocked objective.
+- Consider \`captured_context.steering\` and \`additional_instructions\` within your
+  normal authority and the current task scope.
+- Do not silently execute \`new_requests\` as part of the old task; surface or
+  queue them as distinct follow-up work.
+- Preserve \`unresolved_topics\` without inventing answers.
+- Acknowledge only after consuming both \`result\` and every captured-context category.
 
 \`\`\`bash
 openconfer session wait SESSION_ID --json
 openconfer session result SESSION_ID --json
-# Apply the validated result before the next command.
+# Apply the complete validated result + captured_context packet before the next command.
 openconfer session ack SESSION_ID --run-id RUN_ID --json
 \`\`\`
 
@@ -385,6 +393,34 @@ export interface PhoneDelivery {
   error?: string;
   session_status?: string;
   session_ended?: boolean;
+  answered_by?: string;
+  attempt_id?: string;
+  attempt_count?: number;
+  phone_retry?: import("./types").PhoneRetryView;
+}
+
+export async function callSessionAgain(token: string, sessionId: string): Promise<void> {
+  const res = await fetch(`/v1/sessions/${encodeURIComponent(sessionId)}/phone/call`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+    throw new Error(typeof body.error === "string" ? body.error : "Could not start another call.");
+  }
+}
+
+export async function stopSessionCallbacks(token: string, sessionId: string): Promise<void> {
+  const res = await fetch(`/v1/sessions/${encodeURIComponent(sessionId)}/phone/stop`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+    throw new Error(typeof body.error === "string" ? body.error : "Could not stop callbacks.");
+  }
 }
 
 export async function fetchPhoneDelivery(token: string, sessionId: string): Promise<PhoneDelivery> {

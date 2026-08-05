@@ -15,18 +15,21 @@ function parseQuietHours(spec: string): { start: number; end: number } | null {
   };
 }
 
-function isInQuietHours(timezone: string, quietHours?: string): boolean {
+export function isOperatorInQuietHours(
+  timezone: string,
+  quietHours?: string,
+  at = new Date(),
+): boolean {
   if (!quietHours) return false;
   const range = parseQuietHours(quietHours);
   if (!range) return false;
-  const now = new Date();
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
   });
-  const parts = formatter.formatToParts(now);
+  const parts = formatter.formatToParts(at);
   const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
   const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
   const current = hour * 60 + minute;
@@ -34,6 +37,23 @@ function isInQuietHours(timezone: string, quietHours?: string): boolean {
     return current >= range.start && current < range.end;
   }
   return current >= range.start || current < range.end;
+}
+
+/** Find the first non-quiet minute in absolute time, including across DST changes. */
+export function nextOperatorQuietHoursEnd(
+  timezone: string,
+  quietHours: string | undefined,
+  from = new Date(),
+): Date | null {
+  if (!isOperatorInQuietHours(timezone, quietHours, from)) return from;
+  const cursor = new Date(from);
+  cursor.setUTCSeconds(0, 0);
+  cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
+  for (let minute = 0; minute < 26 * 60; minute++) {
+    if (!isOperatorInQuietHours(timezone, quietHours, cursor)) return cursor;
+    cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
+  }
+  return null;
 }
 
 export function evaluatePolicy(
@@ -63,7 +83,7 @@ export function evaluatePolicy(
     };
   }
   if (input.urgency !== "incident" && input.type !== "incident") {
-    if (isInQuietHours(operator.timezone, operator.quiet_hours)) {
+    if (isOperatorInQuietHours(operator.timezone, operator.quiet_hours)) {
       return {
         allowed: false,
         reason: "Operator is in quiet hours",

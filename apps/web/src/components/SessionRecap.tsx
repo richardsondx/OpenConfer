@@ -10,6 +10,12 @@ export function SessionRecap({ session }: { session: JoinSession }) {
   const context = session.brief.context?.trim();
   const outcome = sessionOutcome(session);
   const detail = outcome.detail;
+  const capturedSections = [
+    ["Steering", session.captured_context?.steering],
+    ["Additional instructions", session.captured_context?.additional_instructions],
+    ["New requests", session.captured_context?.new_requests],
+    ["Unresolved topics", session.captured_context?.unresolved_topics],
+  ] as const;
 
   return (
     <section className="session-recap" aria-label="Session recap">
@@ -66,6 +72,18 @@ export function SessionRecap({ session }: { session: JoinSession }) {
             <dt>Context</dt>
             <dd>{context}</dd>
           </div>
+        )}
+        {capturedSections.map(([label, items]) =>
+          items && items.length > 0 ? (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>
+                <ul>
+                  {items.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </dd>
+            </div>
+          ) : null,
         )}
       </dl>
     </section>

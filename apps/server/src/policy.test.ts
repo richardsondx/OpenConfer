@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { evaluatePolicy, checkRateLimit } from "./policy.js";
+import {
+  evaluatePolicy,
+  checkRateLimit,
+  isOperatorInQuietHours,
+  nextOperatorQuietHoursEnd,
+} from "./policy.js";
 import { getDefaultConfig } from "./config.js";
 
 describe("policy engine", () => {
@@ -47,5 +52,15 @@ describe("policy engine", () => {
       expect(checkRateLimit(agent).allowed).toBe(true);
     }
     expect(checkRateLimit(agent).allowed).toBe(false);
+  });
+
+  it("finds the end of overnight quiet hours for retry deferral", () => {
+    const during = new Date("2026-08-05T23:30:00.000Z");
+    expect(isOperatorInQuietHours("UTC", "22:00-07:00", during)).toBe(true);
+    expect(nextOperatorQuietHoursEnd("UTC", "22:00-07:00", during)?.toISOString()).toBe(
+      "2026-08-06T07:00:00.000Z",
+    );
+    expect(isOperatorInQuietHours("UTC", "22:00-07:00", new Date("2026-08-06T07:00:00.000Z")))
+      .toBe(false);
   });
 });

@@ -178,13 +178,28 @@ act or snooze. Each inbox session has an obvious **Copy link** action for its
 secure join URL. Alert style, sound, snooze duration, and quiet hours are
 configurable under Settings → Incoming calls.
 
+Outbound phone calls use a bounded callback policy configured in **Settings →
+Incoming calls**. The default **Brief** policy retries at about 1 and 5 minutes
+and stops after 10 minutes; **Persistent** retries at about 1, 3, 7, 15, and 25
+minutes and stops after 30 minutes; **Never** disables automatic callbacks. A
+dropped call preserves the latest unconfirmed decision preview. The next call
+reads it back and requires fresh confirmation. Operators can call again
+manually or stop callbacks for an individual open session at any time.
+
+Connected voice calls are bounded to prevent idle model and phone spend. After
+90 seconds without user speech, or after 10 minutes total, OpenConfer closes the
+Realtime connection, LiveKit room, and any Twilio call while leaving the
+decision open in the inbox. Override these limits with
+`OPENCONFER_VOICE_IDLE_TIMEOUT_MS` and `OPENCONFER_VOICE_MAX_DURATION_MS`.
+
 ## Conversation modes
 
 Voice has two independent parts:
 
 1. **LiveKit room** — audio transport. `openconfer serve` writes local credentials
    and starts a LiveKit dev server when Docker is available (`--no-livekit` to skip).
-2. **OpenAI Realtime speaking agent** — `gpt-realtime` in the room. Paste an
+2. **OpenAI Realtime speaking agent** — `gpt-realtime-2.1` in the room. This uses
+   the developer Realtime API, not ChatGPT's GPT-Live model (which is not yet API-accessible). Paste an
    OpenAI API key in **Settings → Voice** (or set `OPENAI_API_KEY`). `openconfer serve`
    starts the conversation worker when a key is present (`--no-voice-worker` to skip).
 

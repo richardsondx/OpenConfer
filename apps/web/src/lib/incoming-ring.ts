@@ -59,6 +59,7 @@ export function previewAlertStyle(
     sound: true,
     browser_notifications: false,
     snooze_minutes: 3,
+    phone_retry_policy: "brief",
   };
   const profile = ringProfileFor("normal", prefs);
   if (!profile) return;

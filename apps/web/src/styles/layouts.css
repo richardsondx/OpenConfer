@@ -695,6 +695,26 @@
   color: rgba(247, 244, 239, 0.82);
 }
 
+.voice-understood-captured {
+  display: grid;
+  gap: var(--oc-space-2);
+  margin-top: var(--oc-space-3);
+  padding-top: var(--oc-space-3);
+  border-top: 1px solid rgba(247, 244, 239, 0.12);
+  color: rgba(247, 244, 239, 0.82);
+  font-size: var(--oc-text-xs);
+}
+
+.voice-understood-captured-title,
+.voice-understood-captured-group strong {
+  font-weight: 600;
+}
+
+.voice-understood-captured-group ul {
+  margin: var(--oc-space-1) 0 0;
+  padding-left: var(--oc-space-4);
+}
+
 .voice-understood-hint {
   margin: var(--oc-space-3) 0 0;
   font-size: var(--oc-text-xs);

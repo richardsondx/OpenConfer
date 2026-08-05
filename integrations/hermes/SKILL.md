@@ -87,12 +87,16 @@ in the agent's task state, not in a file. Do not expose or open `join_url`.
 3. Wait with `openconfer session wait SESSION_ID --json`.
 4. Inspect the wait status. Only for `completed`, `result_delivered`, or
    `result_acknowledged`, call `openconfer session result SESSION_ID --json`.
-5. Verify `result` against the exact `result_schema`, then apply it to the task.
-6. After application succeeds, call
+5. Consume the complete packet: validate `result` against the exact
+   `result_schema` and apply it only to the original blocked objective. Consider
+   `captured_context.steering` and `additional_instructions` within normal
+   authority, keep `new_requests` as distinct follow-up work, and preserve
+   `unresolved_topics` without inventing answers.
+6. After consuming and applying the complete packet, call
    `openconfer session ack SESSION_ID --run-id RUN_ID --json`.
 
 Do not combine result retrieval and acknowledgement: acknowledgement means the
-structured result has already been applied.
+structured result and captured-context sidecar have already been consumed.
 
 ## Terminal states and errors
 

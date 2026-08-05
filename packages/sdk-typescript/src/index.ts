@@ -1,4 +1,21 @@
-import type { CreateSessionInput } from "@openconfer/schemas";
+import type { CapturedContext, CreateSessionInput } from "@openconfer/schemas";
+
+export type { CapturedContext } from "@openconfer/schemas";
+
+export interface OpenConferSessionResponse extends Record<string, unknown> {
+  id: string;
+  status: string;
+  result?: Record<string, unknown>;
+  captured_context?: CapturedContext;
+}
+
+export interface PendingDecisionResponse {
+  result: Record<string, unknown>;
+  summary?: string;
+  captured_context?: CapturedContext;
+  revision: number;
+  previewed_at: string;
+}
 
 export interface OpenConferClientOptions {
   baseUrl: string;
@@ -30,22 +47,51 @@ export class OpenConferClient {
   }
 
   getSession(id: string) {
-    return this.request<Record<string, unknown>>(`/v1/sessions/${id}`);
+    return this.request<OpenConferSessionResponse>(`/v1/sessions/${id}`);
   }
 
   listSessions() {
-    return this.request<{ sessions: Record<string, unknown>[] }>("/v1/sessions");
+    return this.request<{ sessions: OpenConferSessionResponse[] }>("/v1/sessions");
   }
 
   cancelSession(id: string) {
-    return this.request<Record<string, unknown>>(`/v1/sessions/${id}/cancel`, {
+    return this.request<OpenConferSessionResponse>(`/v1/sessions/${id}/cancel`, {
+      method: "POST",
+      body: "{}",
+    });
+  }
+
+  previewDecision(
+    id: string,
+    input: {
+      result: Record<string, unknown>;
+      summary?: string;
+      captured_context?: CapturedContext;
+      expected_revision?: number;
+    },
+  ) {
+    return this.request<PendingDecisionResponse>(`/v1/sessions/${id}/preview`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  callAgain(id: string) {
+    return this.request<OpenConferSessionResponse>(`/v1/sessions/${id}/phone/call`, {
+      method: "POST",
+      body: "{}",
+    });
+  }
+
+  stopAutomaticCallbacks(id: string) {
+    return this.request<OpenConferSessionResponse>(`/v1/sessions/${id}/phone/stop`, {
       method: "POST",
       body: "{}",
     });
   }
 
   acknowledgeResult(id: string, runId?: string) {
-    return this.request<Record<string, unknown>>(`/v1/sessions/${id}/ack`, {
+    return this.request<OpenConferSessionResponse>(`/v1/sessions/${id}/ack`, {
       method: "POST",
       body: JSON.stringify({ run_id: runId }),
     });
@@ -54,7 +100,7 @@ export class OpenConferClient {
   async waitForResult(
     id: string,
     opts?: { intervalMs?: number; timeoutMs?: number },
-  ): Promise<Record<string, unknown>> {
+  ): Promise<OpenConferSessionResponse> {
     const interval = opts?.intervalMs ?? 2000;
     const timeout = opts?.timeoutMs ?? 600_000;
     const start = Date.now();

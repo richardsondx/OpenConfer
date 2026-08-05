@@ -51,6 +51,7 @@ describe("Twilio telephony adapter", () => {
     expect(String(init?.body)).toContain("To=%2B14165550101");
     expect(String(init?.body)).toContain("From=%2B14165550100");
     expect(String(init?.body)).toContain("Url=https%3A%2F%2Fconnector.livekit.cloud%2Fcall");
+    expect(String(init?.body)).toContain("MachineDetection=Enable");
   });
 
   it("fails safely when configuration is incomplete", async () => {
@@ -70,12 +71,25 @@ describe("Twilio telephony adapter", () => {
     });
     const result = await adapter.call(session, { roomName: "room" });
     expect(result.error).toBe("The destination number is invalid");
+    expect(result.retryable).toBe(false);
     expect(result.error).not.toContain(config.authToken);
+  });
+
+  it("classifies provider 5xx failures as retryable", async () => {
+    const adapter = createTwilioTelephonyAdapter(config, {
+      connector: { connectTwilioCall: async () => ({ connectUrl: "wss://connector/call" }) },
+      fetch: async () => new Response(JSON.stringify({ message: "Twilio unavailable" }), { status: 503 }),
+    });
+    await expect(adapter.call(session, { roomName: "room" })).resolves.toMatchObject({
+      success: false,
+      retryable: true,
+      error: "Twilio unavailable",
+    });
   });
 
   it("reads the live Twilio call status", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
-      new Response(JSON.stringify({ status: "ringing" }), {
+      new Response(JSON.stringify({ status: "ringing", answered_by: "human" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -85,7 +99,23 @@ describe("Twilio telephony adapter", () => {
     await expect(adapter.status?.("CA123")).resolves.toEqual({
       success: true,
       status: "ringing",
+      answeredBy: "human",
     });
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/Calls/CA123.json");
+  });
+
+  it("ends an in-progress call when Twilio rejects the pre-connect cancel status", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const status = new URLSearchParams(String(init?.body)).get("Status");
+      return status === "canceled"
+        ? new Response(JSON.stringify({ message: "Call is already in progress" }), { status: 400 })
+        : new Response(JSON.stringify({ status: "completed" }), { status: 200 });
+    });
+    const adapter = createTwilioTelephonyAdapter(config, { fetch: fetchMock });
+
+    await expect(adapter.cancel?.("CA-active")).resolves.toEqual({ success: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain("Status=canceled");
+    expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain("Status=completed");
   });
 });

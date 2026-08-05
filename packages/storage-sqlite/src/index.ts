@@ -6,11 +6,54 @@ import {
   type SessionEvent,
   type SessionState,
   type SessionType,
+  emptyCapturedContext,
   generateEventId,
   assertTransition,
 } from "@openconfer/core";
 import * as schema from "./schema.js";
-import { sessions, events, webhookOutbox, acknowledgements, channelDeliveries } from "./schema.js";
+import {
+  sessions,
+  events,
+  webhookOutbox,
+  acknowledgements,
+  channelDeliveries,
+  phoneAttempts,
+  decisionSubmissions,
+} from "./schema.js";
+
+export type PhoneAttemptTrigger = "initial" | "automatic" | "manual";
+export type PhoneAttemptStatus =
+  | "scheduled"
+  | "dialing"
+  | "queued"
+  | "ringing"
+  | "in-progress"
+  | "completed"
+  | "busy"
+  | "failed"
+  | "no-answer"
+  | "canceled"
+  | "machine"
+  | "superseded";
+
+export type PhoneAttempt = {
+  id: string;
+  sessionId: string;
+  operatorId: string;
+  sequence: number;
+  trigger: PhoneAttemptTrigger;
+  status: PhoneAttemptStatus;
+  providerCallId?: string;
+  roomName?: string;
+  consumesAutomaticSlot: boolean;
+  retryable?: boolean;
+  error?: string;
+  scheduledAt?: string;
+  startedAt?: string;
+  endedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type Db = BetterSQLite3Database<typeof schema>;
 
@@ -45,6 +88,9 @@ function migrate(sqlite: Database.Database): void {
       join_url TEXT,
       result_json TEXT,
       summary TEXT,
+      captured_context_json TEXT,
+      pending_decision_json TEXT,
+      phone_retry_json TEXT,
       human_confirmation_json TEXT,
       idempotency_key TEXT,
       request_fingerprint TEXT,
@@ -97,9 +143,39 @@ function migrate(sqlite: Database.Database): void {
       updated_at TEXT NOT NULL
     )
   `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS phone_attempts (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      operator_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      trigger TEXT NOT NULL,
+      status TEXT NOT NULL,
+      provider_call_id TEXT,
+      room_name TEXT,
+      consumes_automatic_slot INTEGER NOT NULL DEFAULT 0,
+      retryable INTEGER,
+      error TEXT,
+      scheduled_at TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS decision_submissions (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      payload_fingerprint TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)`);
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)`);
   sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_idempotency ON sessions(idempotency_key) WHERE idempotency_key IS NOT NULL`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_phone_attempts_session ON phone_attempts(session_id, sequence)`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_phone_attempts_due ON phone_attempts(status, scheduled_at)`);
   const outboxColumns = new Set(
     (sqlite.prepare("PRAGMA table_info(webhook_outbox)").all() as Array<{ name: string }>).map(
       (column) => column.name,
@@ -124,6 +200,15 @@ function migrate(sqlite: Database.Database): void {
   }
   if (!sessionColumns.has("locale")) {
     sqlite.exec("ALTER TABLE sessions ADD COLUMN locale TEXT NOT NULL DEFAULT 'en'");
+  }
+  if (!sessionColumns.has("captured_context_json")) {
+    sqlite.exec("ALTER TABLE sessions ADD COLUMN captured_context_json TEXT");
+  }
+  if (!sessionColumns.has("pending_decision_json")) {
+    sqlite.exec("ALTER TABLE sessions ADD COLUMN pending_decision_json TEXT");
+  }
+  if (!sessionColumns.has("phone_retry_json")) {
+    sqlite.exec("ALTER TABLE sessions ADD COLUMN phone_retry_json TEXT");
   }
 }
 
@@ -150,9 +235,35 @@ function rowToSession(row: typeof sessions.$inferSelect): ConferSession {
     joinUrl: row.joinUrl ?? undefined,
     result: row.resultJson ? JSON.parse(row.resultJson) : undefined,
     summary: row.summary ?? undefined,
+    capturedContext: row.capturedContextJson
+      ? JSON.parse(row.capturedContextJson)
+      : emptyCapturedContext(),
+    pendingDecision: row.pendingDecisionJson ? JSON.parse(row.pendingDecisionJson) : undefined,
+    phoneRetry: row.phoneRetryJson ? JSON.parse(row.phoneRetryJson) : undefined,
     humanConfirmation: row.humanConfirmationJson
       ? JSON.parse(row.humanConfirmationJson)
       : undefined,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function rowToPhoneAttempt(row: typeof phoneAttempts.$inferSelect): PhoneAttempt {
+  return {
+    id: row.id,
+    sessionId: row.sessionId,
+    operatorId: row.operatorId,
+    sequence: row.sequence,
+    trigger: row.trigger as PhoneAttemptTrigger,
+    status: row.status as PhoneAttemptStatus,
+    providerCallId: row.providerCallId ?? undefined,
+    roomName: row.roomName ?? undefined,
+    consumesAutomaticSlot: row.consumesAutomaticSlot,
+    retryable: row.retryable ?? undefined,
+    error: row.error ?? undefined,
+    scheduledAt: row.scheduledAt ?? undefined,
+    startedAt: row.startedAt ?? undefined,
+    endedAt: row.endedAt ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -184,6 +295,11 @@ export class SessionStore {
       joinUrl: session.joinUrl ?? null,
       resultJson: session.result ? JSON.stringify(session.result) : null,
       summary: session.summary ?? null,
+      capturedContextJson: session.capturedContext
+        ? JSON.stringify(session.capturedContext)
+        : null,
+      pendingDecisionJson: session.pendingDecision ? JSON.stringify(session.pendingDecision) : null,
+      phoneRetryJson: session.phoneRetry ? JSON.stringify(session.phoneRetry) : null,
       humanConfirmationJson: session.humanConfirmation
         ? JSON.stringify(session.humanConfirmation)
         : null,
@@ -235,6 +351,27 @@ export class SessionStore {
     return rows.map(rowToSession);
   }
 
+  listDueExpirations(now = new Date().toISOString()): ConferSession[] {
+    const expirable: SessionState[] = [
+      "created",
+      "policy_check",
+      "queued",
+      "scheduled",
+      "dispatching",
+      "notified",
+      "snoozed",
+      "joining",
+      "active",
+      "confirming",
+    ];
+    return this.db
+      .select()
+      .from(sessions)
+      .where(and(lte(sessions.expiresAt, now), inArray(sessions.status, expirable)))
+      .all()
+      .map(rowToSession);
+  }
+
   updateStatus(id: string, from: SessionState, to: SessionState): ConferSession {
     assertTransition(from, to);
     const now = new Date().toISOString();
@@ -272,6 +409,17 @@ export class SessionStore {
     if (patch.joinUrl) updates.joinUrl = patch.joinUrl;
     if (patch.result) updates.resultJson = JSON.stringify(patch.result);
     if (patch.summary) updates.summary = patch.summary;
+    if ("capturedContext" in patch) {
+      updates.capturedContextJson = JSON.stringify(patch.capturedContext ?? emptyCapturedContext());
+    }
+    if ("pendingDecision" in patch) {
+      updates.pendingDecisionJson = patch.pendingDecision
+        ? JSON.stringify(patch.pendingDecision)
+        : null;
+    }
+    if ("phoneRetry" in patch) {
+      updates.phoneRetryJson = patch.phoneRetry ? JSON.stringify(patch.phoneRetry) : null;
+    }
     if (patch.humanConfirmation)
       updates.humanConfirmationJson = JSON.stringify(patch.humanConfirmation);
     if ("snoozeUntil" in patch) updates.snoozeUntil = patch.snoozeUntil ?? null;
@@ -410,6 +558,157 @@ export class SessionStore {
       : null;
   }
 
+  createPhoneAttempt(input: {
+    id: string;
+    sessionId: string;
+    operatorId: string;
+    trigger: PhoneAttemptTrigger;
+    status: "scheduled" | "dialing";
+    scheduledAt?: string;
+    consumesAutomaticSlot?: boolean;
+  }): PhoneAttempt {
+    return this.transaction(() => {
+      const sequence =
+        (this.db
+          .select({ sequence: phoneAttempts.sequence })
+          .from(phoneAttempts)
+          .where(eq(phoneAttempts.sessionId, input.sessionId))
+          .orderBy(desc(phoneAttempts.sequence))
+          .limit(1)
+          .get()?.sequence ?? 0) + 1;
+      const now = new Date().toISOString();
+      this.db.insert(phoneAttempts).values({
+        id: input.id,
+        sessionId: input.sessionId,
+        operatorId: input.operatorId,
+        sequence,
+        trigger: input.trigger,
+        status: input.status,
+        scheduledAt: input.scheduledAt ?? null,
+        startedAt: input.status === "dialing" ? now : null,
+        consumesAutomaticSlot: input.consumesAutomaticSlot ?? false,
+        createdAt: now,
+        updatedAt: now,
+      }).run();
+      const created = this.getPhoneAttempt(input.id);
+      if (!created) throw new Error(`Phone attempt not found after insert: ${input.id}`);
+      return created;
+    });
+  }
+
+  getPhoneAttempt(id: string): PhoneAttempt | null {
+    const row = this.db.select().from(phoneAttempts).where(eq(phoneAttempts.id, id)).get();
+    return row ? rowToPhoneAttempt(row) : null;
+  }
+
+  listPhoneAttempts(sessionId: string): PhoneAttempt[] {
+    return this.db
+      .select()
+      .from(phoneAttempts)
+      .where(eq(phoneAttempts.sessionId, sessionId))
+      .orderBy(phoneAttempts.sequence)
+      .all()
+      .map(rowToPhoneAttempt);
+  }
+
+  latestPhoneAttempt(sessionId: string): PhoneAttempt | null {
+    const row = this.db
+      .select()
+      .from(phoneAttempts)
+      .where(eq(phoneAttempts.sessionId, sessionId))
+      .orderBy(desc(phoneAttempts.sequence))
+      .limit(1)
+      .get();
+    return row ? rowToPhoneAttempt(row) : null;
+  }
+
+  listDuePhoneAttempts(now = new Date().toISOString()): PhoneAttempt[] {
+    return this.db
+      .select()
+      .from(phoneAttempts)
+      .where(and(eq(phoneAttempts.status, "scheduled"), lte(phoneAttempts.scheduledAt, now)))
+      .all()
+      .map(rowToPhoneAttempt);
+  }
+
+  listStaleClaimedPhoneAttempts(
+    claimedBefore: string,
+  ): PhoneAttempt[] {
+    return this.db
+      .select()
+      .from(phoneAttempts)
+      .where(
+        and(
+          inArray(phoneAttempts.status, ["dialing", "queued"]),
+          isNull(phoneAttempts.providerCallId),
+          lte(phoneAttempts.startedAt, claimedBefore),
+        ),
+      )
+      .all()
+      .map(rowToPhoneAttempt);
+  }
+
+  hasActivePhoneAttempt(operatorId: string, exceptId?: string): boolean {
+    const active = new Set(["dialing", "queued", "ringing", "in-progress"]);
+    return this.db
+      .select()
+      .from(phoneAttempts)
+      .where(eq(phoneAttempts.operatorId, operatorId))
+      .all()
+      .some((row) => row.id !== exceptId && active.has(row.status));
+  }
+
+  claimPhoneAttempt(id: string): PhoneAttempt | null {
+    return this.transaction(() => {
+      const attempt = this.getPhoneAttempt(id);
+      if (!attempt || attempt.status !== "scheduled") return null;
+      if (this.hasActivePhoneAttempt(attempt.operatorId, id)) return null;
+      const now = new Date().toISOString();
+      const updated = this.db
+        .update(phoneAttempts)
+        .set({ status: "dialing", startedAt: now, updatedAt: now })
+        .where(and(eq(phoneAttempts.id, id), eq(phoneAttempts.status, "scheduled")))
+        .run();
+      return updated.changes === 1 ? this.getPhoneAttempt(id) : null;
+    });
+  }
+
+  updatePhoneAttempt(
+    id: string,
+    patch: Partial<Pick<PhoneAttempt, "status" | "providerCallId" | "roomName" | "retryable" | "error" | "scheduledAt" | "startedAt" | "endedAt">>,
+  ): PhoneAttempt {
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    if (patch.status !== undefined) updates.status = patch.status;
+    if (patch.providerCallId !== undefined) updates.providerCallId = patch.providerCallId;
+    if (patch.roomName !== undefined) updates.roomName = patch.roomName;
+    if (patch.retryable !== undefined) updates.retryable = patch.retryable;
+    if (patch.error !== undefined) updates.error = patch.error;
+    if (patch.scheduledAt !== undefined) updates.scheduledAt = patch.scheduledAt;
+    if (patch.startedAt !== undefined) updates.startedAt = patch.startedAt;
+    if (patch.endedAt !== undefined) updates.endedAt = patch.endedAt;
+    this.db.update(phoneAttempts).set(updates).where(eq(phoneAttempts.id, id)).run();
+    const updated = this.getPhoneAttempt(id);
+    if (!updated) throw new Error(`Phone attempt not found: ${id}`);
+    return updated;
+  }
+
+  supersedeScheduledPhoneAttempts(sessionId: string): number {
+    return this.db
+      .update(phoneAttempts)
+      .set({ status: "superseded", endedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+      .where(and(eq(phoneAttempts.sessionId, sessionId), eq(phoneAttempts.status, "scheduled")))
+      .run().changes;
+  }
+
+  getDecisionSubmission(id: string): { sessionId: string; payloadFingerprint: string } | null {
+    const row = this.db
+      .select()
+      .from(decisionSubmissions)
+      .where(eq(decisionSubmissions.id, id))
+      .get();
+    return row ? { sessionId: row.sessionId, payloadFingerprint: row.payloadFingerprint } : null;
+  }
+
   enqueueWebhook(
     id: string,
     sessionId: string,
@@ -543,7 +842,10 @@ export class SessionStore {
 
   completeSession(
     id: string,
-    patch: Pick<ConferSession, "result" | "summary" | "humanConfirmation">,
+    patch: Pick<
+      ConferSession,
+      "result" | "summary" | "capturedContext" | "humanConfirmation"
+    >,
     webhook?: {
       id: string;
       url: string;
@@ -552,12 +854,36 @@ export class SessionStore {
       eventId: string;
       timestamp: string;
     },
+    submission?: { id: string; payloadFingerprint: string },
   ): ConferSession {
     return this.transaction(() => {
-      this.update(id, patch);
+      const current = this.getById(id);
+      if (submission) {
+        this.db.insert(decisionSubmissions).values({
+          id: submission.id,
+          sessionId: id,
+          payloadFingerprint: submission.payloadFingerprint,
+          createdAt: new Date().toISOString(),
+        }).run();
+      }
+      this.update(id, {
+        ...patch,
+        pendingDecision: undefined,
+        phoneRetry: current?.phoneRetry
+          ? {
+              ...current.phoneRetry,
+              state: "stopped",
+              automaticStopped: true,
+              nextRetryAt: undefined,
+            }
+          : undefined,
+      });
       const completed = this.updateStatus(id, "confirming", "completed");
       this.addEvent(id, "session.completed", { summary: patch.summary });
-      this.addEvent(id, "session.result_ready", { result: patch.result });
+      this.addEvent(id, "session.result_ready", {
+        result: patch.result,
+        captured_context: patch.capturedContext ?? emptyCapturedContext(),
+      });
       if (webhook) {
         this.enqueueWebhook(
           webhook.id,

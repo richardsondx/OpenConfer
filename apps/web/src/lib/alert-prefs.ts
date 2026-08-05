@@ -7,6 +7,7 @@ export type AlertPrefs = {
   sound: boolean;
   browser_notifications: boolean;
   snooze_minutes: number;
+  phone_retry_policy: "never" | "brief" | "persistent";
 };
 
 export const DEFAULT_ALERT_PREFS: AlertPrefs = {
@@ -14,6 +15,7 @@ export const DEFAULT_ALERT_PREFS: AlertPrefs = {
   sound: true,
   browser_notifications: false,
   snooze_minutes: 3,
+  phone_retry_policy: "brief",
 };
 
 export const ALLOWED_SNOOZE_MINUTES = [1, 3, 5, 10, 15, 30] as const;
@@ -76,5 +78,9 @@ export function normalizeAlertPrefs(
     snooze_minutes: (ALLOWED_SNOOZE_MINUTES as readonly number[]).includes(minutes)
       ? minutes
       : DEFAULT_ALERT_PREFS.snooze_minutes,
+    phone_retry_policy:
+      raw?.phone_retry_policy === "never" || raw?.phone_retry_policy === "persistent"
+        ? raw.phone_retry_policy
+        : "brief",
   };
 }

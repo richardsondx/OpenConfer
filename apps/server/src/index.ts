@@ -8,9 +8,15 @@ import {
   AckResultSchema,
   SettingsPatchSchema,
   SnoozeSessionSchema,
+  PreviewDecisionSchema,
 } from "@openconfer/schemas";
 import { loadConfig, getDbPath } from "./config.js";
-import { IdempotencyConflictError, SessionService } from "./session-service.js";
+import {
+  IdempotencyConflictError,
+  PreviewConflictError,
+  SessionService,
+  SubmissionConflictError,
+} from "./session-service.js";
 import { startWebhookWorker } from "./webhook-worker.js";
 import {
   applySettingsPatch,
@@ -55,7 +61,9 @@ export async function buildServer() {
         /\/v1\/sessions\/[^/]+\/decline$/.test(req.url.split("?")[0] ?? "") ||
         /\/v1\/sessions\/[^/]+\/cancel$/.test(req.url.split("?")[0] ?? "") ||
         /\/v1\/sessions\/[^/]+\/snooze$/.test(req.url.split("?")[0] ?? "") ||
-        /\/v1\/sessions\/[^/]+\/seen$/.test(req.url.split("?")[0] ?? ""))
+        /\/v1\/sessions\/[^/]+\/seen$/.test(req.url.split("?")[0] ?? "") ||
+        /\/v1\/sessions\/[^/]+\/phone\/call$/.test(req.url.split("?")[0] ?? "") ||
+        /\/v1\/sessions\/[^/]+\/phone\/stop$/.test(req.url.split("?")[0] ?? ""))
     ) {
       const joinToken = req.headers["x-join-token"] as string | undefined;
       if (joinToken) {
@@ -152,6 +160,8 @@ export async function buildServer() {
         created_at: session.createdAt,
         join_url: session.joinUrl,
         objective: session.objective,
+        pending_decision: serializePendingDecision(session),
+        phone_retry: serializePhoneRetry(session),
         ...(delivery ? { delivery } : {}),
         links: { self: `/v1/sessions/${session.id}` },
       });
@@ -196,6 +206,8 @@ export async function buildServer() {
       status: session.status,
       created_at: session.createdAt,
       join_url: session.joinUrl,
+      pending_decision: serializePendingDecision(session),
+      phone_retry: serializePhoneRetry(session),
       links: { self: `/v1/sessions/${session.id}` },
     });
   });
@@ -263,14 +275,77 @@ export async function buildServer() {
         parsed.data.result,
         parsed.data.summary,
         parsed.data.method,
+        parsed.data.captured_context,
+        parsed.data.submission_id,
+        parsed.data.preview_revision,
       );
       if (!session) return reply.code(404).send({ error: "Not found or invalid state" });
       return toResult(session);
     } catch (err) {
+      if (err instanceof SubmissionConflictError || err instanceof PreviewConflictError) {
+        return reply.code(409).send({ error: err.message });
+      }
       return reply.code(400).send({
         error: err instanceof Error ? err.message : "Validation failed",
       });
     }
+  });
+
+  app.post("/v1/sessions/:id/preview", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = PreviewDecisionSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    try {
+      const preview = sessions.preview(
+        id,
+        parsed.data.result,
+        parsed.data.summary,
+        parsed.data.captured_context,
+        parsed.data.expected_revision,
+      );
+      if (!preview) return reply.code(404).send({ error: "Not found or invalid state" });
+      return {
+        result: preview.result,
+        summary: preview.summary,
+        captured_context: preview.capturedContext,
+        revision: preview.revision,
+        previewed_at: preview.previewedAt,
+      };
+    } catch (error) {
+      if (error instanceof PreviewConflictError) return reply.code(409).send({ error: error.message });
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "Invalid preview" });
+    }
+  });
+
+  app.post("/v1/sessions/:id/phone/call", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const session = await sessions.callAgain(id);
+      if (!session) return reply.code(404).send({ error: "Not found or session is closed" });
+      return toApiSession(session);
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "Could not start call" });
+    }
+  });
+
+  app.post("/v1/sessions/:id/phone/stop", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const session = sessions.stopPhoneRetries(id);
+    if (!session) return reply.code(404).send({ error: "Not found or session is closed" });
+    return toApiSession(session);
+  });
+
+  app.post("/v1/sessions/:id/voice/stop", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const requestedReason =
+      req.body && typeof req.body === "object" && "reason" in req.body
+        ? (req.body as { reason?: unknown }).reason
+        : undefined;
+    const allowedReasons = ["idle_timeout", "max_duration", "operator_request"] as const;
+    const reason = allowedReasons.find((candidate) => candidate === requestedReason) ?? "operator_request";
+    const session = await sessions.disconnectVoice(id, reason);
+    if (!session) return reply.code(404).send({ error: "Not found" });
+    return toApiSession(session);
   });
 
   app.post("/v1/sessions/:id/ack", async (req, reply) => {
@@ -309,6 +384,10 @@ export async function buildServer() {
     const { token } = (req.body as { token?: string }) ?? {};
     if (!token) return reply.code(400).send({ error: "Token required" });
     try {
+      if (!(await sessions.authorizeJoin(id, token))) {
+        return reply.code(404).send({ error: "Invalid join link or session is no longer joinable." });
+      }
+      await sessions.prepareBrowserJoin(id);
       const connection = await sessions.join(id, token);
       if (!connection) return reply.code(404).send({ error: "Invalid join link or session is no longer joinable." });
       return {
@@ -347,7 +426,7 @@ export async function buildServer() {
   });
 
   const worker = startWebhookWorker(store);
-  const expirySweep = setInterval(() => store.expireDue(), 30_000);
+  const expirySweep = setInterval(() => sessions.expireDueSessions(), 30_000);
   const snoozeSweep = setInterval(() => {
     void sessions.wakeDueSnoozes();
   }, 15_000);
@@ -391,6 +470,9 @@ function toApiSession(session: import("@openconfer/core").ConferSession) {
     join_url: session.joinUrl,
     result: session.result,
     summary: session.summary,
+    captured_context: session.capturedContext,
+    pending_decision: serializePendingDecision(session),
+    phone_retry: serializePhoneRetry(session),
     has_callback: Boolean(session.callback?.url),
     continuation: session.continuation
       ? {
@@ -429,7 +511,39 @@ function toJoinSession(session: import("@openconfer/core").ConferSession) {
     result_schema: session.resultSchema,
     result: session.result,
     summary: session.summary,
+    captured_context: session.capturedContext,
+    pending_decision: serializePendingDecision(session),
+    phone_retry: serializePhoneRetry(session),
     has_callback: Boolean(session.callback?.url),
+  };
+}
+
+function serializePendingDecision(session: import("@openconfer/core").ConferSession) {
+  return session.pendingDecision
+    ? {
+        result: session.pendingDecision.result,
+        summary: session.pendingDecision.summary,
+        captured_context: session.pendingDecision.capturedContext,
+        revision: session.pendingDecision.revision,
+        previewed_at: session.pendingDecision.previewedAt,
+      }
+    : undefined;
+}
+
+function serializePhoneRetry(session: import("@openconfer/core").ConferSession) {
+  if (!session.phoneRetry) return undefined;
+  const callbackLimits = { never: 0, brief: 2, persistent: 5 } as const;
+  return {
+    policy: session.phoneRetry.policy,
+    state: session.phoneRetry.state,
+    attempt_count: session.phoneRetry.attemptCount ?? 0,
+    automatic_callbacks_used: session.phoneRetry.automaticCallbacksUsed,
+    max_automatic_callbacks: callbackLimits[session.phoneRetry.policy],
+    automatic_stopped: session.phoneRetry.automaticStopped,
+    next_retry_at: session.phoneRetry.nextRetryAt,
+    deadline_at: session.phoneRetry.deadlineAt,
+    last_outcome: session.phoneRetry.lastOutcome,
+    blocked_reason: session.phoneRetry.blockedReason,
   };
 }
 
@@ -440,6 +554,7 @@ function toResult(session: import("@openconfer/core").ConferSession) {
     completion_reason: "human_confirmed",
     summary: session.summary ?? "",
     result: session.result,
+    captured_context: session.capturedContext,
     continuation: session.continuation
       ? {
           run_id: session.continuation.runId,

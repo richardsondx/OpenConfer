@@ -4,9 +4,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   applySpeakingPreset,
+  CapturedContextSchema,
+  ConfirmResultSchema,
   ConfigSchema,
   CreateSessionSchema,
   normalizeSpeakingFields,
+  OperatorAlertsSchema,
   resolveSpeakingReady,
   validateResultAgainstSchema,
 } from "./index.js";
@@ -26,6 +29,14 @@ describe("CreateSessionSchema locale", () => {
     expect(CreateSessionSchema.safeParse({ ...decision, locale: "not_a_locale" }).success).toBe(
       false,
     );
+  });
+});
+
+describe("phone retry preferences", () => {
+  it("defaults to the bounded brief policy and accepts all presets", () => {
+    expect(OperatorAlertsSchema.parse({}).phone_retry_policy).toBe("brief");
+    expect(OperatorAlertsSchema.parse({ phone_retry_policy: "never" }).phone_retry_policy).toBe("never");
+    expect(OperatorAlertsSchema.parse({ phone_retry_policy: "persistent" }).phone_retry_policy).toBe("persistent");
   });
 });
 
@@ -152,6 +163,55 @@ describe("validateResultAgainstSchema", () => {
     expect(speaking.openai_api_key).toBe("sk-legacy");
   });
 
+  it("upgrades only the deprecated stock Live model value", () => {
+    expect(
+      normalizeSpeakingFields({ preset: "live", realtime: { model: "gpt-realtime" } }).realtime
+        .model,
+    ).toBe("gpt-realtime-2.1");
+    expect(
+      normalizeSpeakingFields({ preset: "custom", realtime: { model: "gpt-realtime" } }).realtime
+        .model,
+    ).toBe("gpt-realtime");
+    expect(
+      normalizeSpeakingFields({
+        preset: "flexible",
+        speaking_mode: "pipeline",
+        realtime: { model: "gpt-realtime" },
+      }).realtime.model,
+    ).toBe("gpt-realtime");
+    expect(
+      normalizeSpeakingFields({ preset: "live", realtime: { model: "vendor/future-live" } })
+        .realtime.model,
+    ).toBe("vendor/future-live");
+  });
+
+  it("normalizes captured context independently from result-schema validation", () => {
+    expect(CapturedContextSchema.parse({})).toEqual({
+      steering: [],
+      additional_instructions: [],
+      new_requests: [],
+      unresolved_topics: [],
+    });
+    const confirmation = ConfirmResultSchema.parse({
+      result: { selected_option: "browser" },
+      captured_context: { steering: ["Use passkeys"] },
+    });
+    expect(confirmation.captured_context).toEqual({
+      steering: ["Use passkeys"],
+      additional_instructions: [],
+      new_requests: [],
+      unresolved_topics: [],
+    });
+    expect(
+      validateResultAgainstSchema(confirmation.result, {
+        type: "object",
+        additionalProperties: false,
+        required: ["selected_option"],
+        properties: { selected_option: { type: "string" } },
+      }).valid,
+    ).toBe(true);
+  });
+
   it("applies flexible and local speaking presets", () => {
     const flexible = applySpeakingPreset("flexible", {});
     expect(flexible.speaking_mode).toBe("pipeline");
@@ -179,6 +239,7 @@ describe("validateResultAgainstSchema", () => {
     });
     expect(config.conversation.speaking_mode).toBe("realtime");
     expect(config.conversation.preset).toBe("live");
+    expect(config.conversation.realtime.model).toBe("gpt-realtime-2.1");
     expect(config.conversation.realtime.api_key).toBe("sk-test");
     expect(resolveSpeakingReady(config.conversation)).toBe("ready");
   });

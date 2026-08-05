@@ -12,6 +12,8 @@ describe("parseDecisionSignal", () => {
       kind: "ok",
       result: undefined,
       summary: undefined,
+      captured_context: undefined,
+      revision: undefined,
     });
   });
 
@@ -23,12 +25,15 @@ describe("parseDecisionSignal", () => {
           status: "preview",
           result: { choice: "pizza" },
           summary: "Ordering pizza",
+          revision: 3,
         }),
       ),
     ).toEqual({
       kind: "preview",
       result: { choice: "pizza" },
       summary: "Ordering pizza",
+      captured_context: undefined,
+      revision: 3,
     });
   });
 
@@ -46,6 +51,44 @@ describe("parseDecisionSignal", () => {
       kind: "ok",
       result: { approved: true },
       summary: "Go ahead",
+      captured_context: undefined,
+      revision: undefined,
+    });
+  });
+
+  it("parses captured context on decision and sidecar-only previews", () => {
+    const captured_context = {
+      steering: ["Require passkeys"],
+      additional_instructions: [],
+      new_requests: ["Audit mobile login"],
+      unresolved_topics: [],
+    };
+    expect(
+      parseDecisionSignal(
+        JSON.stringify({
+          type: "openconfer.decision",
+          status: "preview",
+          result: { approved: true },
+          captured_context,
+        }),
+      ),
+    ).toEqual({
+      kind: "preview",
+      result: { approved: true },
+      summary: undefined,
+      captured_context,
+      revision: undefined,
+    });
+    expect(
+      parseDecisionSignal(
+        JSON.stringify({ type: "openconfer.decision", status: "preview", captured_context }),
+      ),
+    ).toEqual({
+      kind: "preview",
+      result: undefined,
+      summary: undefined,
+      captured_context,
+      revision: undefined,
     });
   });
 

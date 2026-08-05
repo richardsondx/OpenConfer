@@ -346,11 +346,11 @@ describe("InboxPage", () => {
     );
   });
 
-  it("refreshes the session as ended when a phone call finishes without a decision", async () => {
+  it("keeps the session waiting when a phone call finishes without a decision", async () => {
     stubFetch([waitingSession], phoneSettingsPayload, {
       status: "succeeded",
       provider_status: "completed",
-      session_ended: true,
+      session_ended: false,
     });
     sessionStorage.setItem("oc_token", "oc_test_token");
     localStorage.setItem("oc_agent_connected", "1");
@@ -364,9 +364,9 @@ describe("InboxPage", () => {
     await screen.findByRole("button", { name: /phone calls enabled/i });
     fireEvent.click(screen.getByRole("button", { name: /^test call$/i }));
 
-    expect(await screen.findByText(/session ended automatically/i, {}, { timeout: 3_000 })).toBeInTheDocument();
+    expect(await screen.findByText(/session remains available in your inbox/i, {}, { timeout: 3_000 })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /check phone settings/i })).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/^cancelled$/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/^in progress$/i)).toBeInTheDocument());
   });
 
   it("shows type-aware labels and shape cues for standup, approval, and research rows", async () => {

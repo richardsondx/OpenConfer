@@ -10,7 +10,10 @@ export interface LiveKitConfig {
   mock?: boolean;
 }
 
-function sessionMetadata(session: Parameters<ConversationAdapter["createRoom"]>[0]): string {
+function sessionMetadata(
+  session: Parameters<ConversationAdapter["createRoom"]>[0],
+  surface: NonNullable<Parameters<ConversationAdapter["createRoom"]>[1]>["surface"] = "browser",
+): string {
   return JSON.stringify({
     sessionId: session.id,
     type: session.type,
@@ -20,6 +23,15 @@ function sessionMetadata(session: Parameters<ConversationAdapter["createRoom"]>[
     objective: session.objective,
     brief: session.brief,
     resultSchema: session.resultSchema,
+    surface,
+    pendingDecision: session.pendingDecision
+      ? {
+          result: session.pendingDecision.result,
+          summary: session.pendingDecision.summary,
+          capturedContext: session.pendingDecision.capturedContext,
+          revision: session.pendingDecision.revision,
+        }
+      : undefined,
   });
 }
 
@@ -28,8 +40,8 @@ export function createLiveKitAdapter(config: LiveKitConfig): ConversationAdapter
 
   return {
     name: mock ? "browser-mock" : "livekit",
-    async createRoom(session) {
-      const roomName = `confer-${session.id}`;
+    async createRoom(session, options) {
+      const roomName = options?.roomName ?? `confer-${session.id}`;
       if (mock) {
         return { roomName, token: `mock-${session.id}`, url: config.url ?? "mock://local" };
       }
@@ -37,7 +49,7 @@ export function createLiveKitAdapter(config: LiveKitConfig): ConversationAdapter
         throw new Error("LiveKit URL, API key, and API secret are required");
       }
 
-      const metadata = sessionMetadata(session);
+      const metadata = sessionMetadata(session, options?.surface);
       const agentName = config.agentName;
 
       // Create the room (with agent dispatch) before minting the operator token.
@@ -78,11 +90,14 @@ export function createLiveKitAdapter(config: LiveKitConfig): ConversationAdapter
       const token = await at.toJwt();
       return { roomName, token, url: config.url };
     },
-    async endRoom(sessionId) {
+    async endRoom(sessionIdOrRoomName) {
       if (mock || !config.apiUrl) return;
       const apiUrl = config.apiUrl.replace(/^ws:/, "http:").replace(/^wss:/, "https:");
       const api = new LiveKitAPI({ host: apiUrl, apiKey: config.apiKey, secret: config.apiSecret });
-      await api.room.deleteRoom(`confer-${sessionId}`).catch(() => undefined);
+      const roomName = sessionIdOrRoomName.startsWith("confer-")
+        ? sessionIdOrRoomName
+        : `confer-${sessionIdOrRoomName}`;
+      await api.room.deleteRoom(roomName).catch(() => undefined);
     },
     async test() {
       if (mock) return { ok: true, message: "Browser mock conversation adapter ready" };

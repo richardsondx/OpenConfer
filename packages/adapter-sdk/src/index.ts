@@ -20,10 +20,19 @@ export interface ConversationRoom {
   url?: string;
 }
 
+export type ConversationSurface = "browser" | "phone";
+
+export interface CreateConversationRoomOptions {
+  roomName?: string;
+  /** The operator-facing surface attached to the room. Defaults to browser. */
+  surface?: ConversationSurface;
+}
+
 export interface ConversationAdapter {
   readonly name: string;
-  createRoom(session: ConferSession): Promise<ConversationRoom>;
-  endRoom(sessionId: string): Promise<void>;
+  createRoom(session: ConferSession, options?: CreateConversationRoomOptions): Promise<ConversationRoom>;
+  /** Accepts either a session id (legacy browser room) or a complete room name. */
+  endRoom(sessionIdOrRoomName: string): Promise<void>;
   test?(): Promise<{ ok: boolean; message: string }>;
 }
 
@@ -33,11 +42,13 @@ export interface TelephonyCallResult {
   callId?: string;
   message?: string;
   error?: string;
+  retryable?: boolean;
 }
 
 export interface TelephonyCallStatusResult {
   success: boolean;
   status?: string;
+  answeredBy?: string;
   error?: string;
 }
 

@@ -19,6 +19,7 @@ export const DEFAULT_CARTESIA_VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02";
 export const DEFAULT_ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM";
 export const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 export const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1";
 
 export type RealtimeSpeakingConfig = {
   provider: "openai";
@@ -66,7 +67,7 @@ export type SpeakingReadyStatus = "ready" | "missing_credentials";
 export function defaultRealtimeConfig(partial?: Partial<RealtimeSpeakingConfig>): RealtimeSpeakingConfig {
   return {
     provider: "openai",
-    model: partial?.model ?? "gpt-realtime",
+    model: partial?.model ?? DEFAULT_REALTIME_MODEL,
     voice: partial?.voice ?? "marin",
     ...(partial?.api_key ? { api_key: partial.api_key } : {}),
   };
@@ -247,9 +248,16 @@ export function normalizeSpeakingFields(raw: LooseConversation): SpeakingConvers
       ? "realtime"
       : "pipeline") as SpeakingMode;
 
+  const requestedRealtimeModel = raw.realtime?.model ?? legacyModel;
   const realtime = defaultRealtimeConfig({
     ...raw.realtime,
-    model: raw.realtime?.model ?? legacyModel,
+    // The original gpt-realtime value was the stock Live preset default. Upgrade
+    // that exact deprecated default in Live mode, while preserving custom and
+    // pipeline selections (including arbitrary future model ids).
+    model:
+      preset === "live" && requestedRealtimeModel === "gpt-realtime"
+        ? DEFAULT_REALTIME_MODEL
+        : requestedRealtimeModel,
     voice: raw.realtime?.voice ?? legacyVoice,
     api_key: raw.realtime?.api_key ?? legacyKey,
   });

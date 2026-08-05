@@ -99,6 +99,40 @@ describe("SettingsModal Twilio phone channel", () => {
     await waitFor(() => expect(patches).toHaveLength(2));
     expect(patches[1]?.routes?.default?.notify).toEqual(["secure_link"]);
   });
+
+  it("defaults callback persistence to brief and saves an explicit operator preference", async () => {
+    const current = settings();
+    const patches: SettingsPatch[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PATCH") patches.push(JSON.parse(String(init.body)) as SettingsPatch);
+        return new Response(JSON.stringify(current), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    render(
+      <SettingsModal
+        token="oc_test"
+        open
+        initialSection="preferences"
+        onClose={() => undefined}
+      />,
+    );
+
+    const policy = await screen.findByLabelText("If I miss or disconnect a phone call");
+    expect(policy).toHaveValue("brief");
+    expect(screen.getByText(/2 callbacks within 10 minutes \(default\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Twilio call charges apply to every attempt/i)).toBeInTheDocument();
+    fireEvent.change(policy, { target: { value: "persistent" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]?.operators?.me?.alerts?.phone_retry_policy).toBe("persistent");
+  });
 });
 
 describe("SettingsModal app version", () => {
@@ -227,7 +261,7 @@ describe("SettingsModal sandbox test call", () => {
 
     expect(
       await screen.findByText(
-        "Test the active Live speaking agent: OpenAI Realtime · gpt-realtime · marin.",
+        "Test the active OpenAI Realtime speaking agent: OpenAI Realtime · gpt-realtime-2.1 · marin.",
       ),
     ).toBeInTheDocument();
     const start = screen.getByRole("button", { name: /start test call/i });

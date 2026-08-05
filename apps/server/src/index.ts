@@ -16,7 +16,10 @@ import {
   applySettingsPatch,
   DEMO_SESSION_PAYLOADS,
   persistConfig,
+  revealSettingsSecret,
+  SETTINGS_SECRET_NAMES,
   toSettingsView,
+  type SettingsSecretName,
 } from "./settings.js";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
@@ -70,6 +73,19 @@ export async function buildServer() {
   app.get("/health", async () => ({ status: "ok", service: "openconfer" }));
 
   app.get("/v1/settings", async () => toSettingsView(config));
+
+  app.post("/v1/settings/secrets/reveal", async (req, reply) => {
+    const name =
+      req.body && typeof req.body === "object" && "name" in req.body
+        ? (req.body as { name?: unknown }).name
+        : undefined;
+    if (typeof name !== "string" || !SETTINGS_SECRET_NAMES.includes(name as SettingsSecretName)) {
+      return reply.code(400).send({ error: "Unknown settings secret" });
+    }
+    const value = revealSettingsSecret(config, name as SettingsSecretName);
+    if (!value) return reply.code(404).send({ error: "That secret is not configured" });
+    return reply.header("Cache-Control", "no-store").send({ value });
+  });
 
   app.patch("/v1/settings", async (req, reply) => {
     const parsed = SettingsPatchSchema.safeParse(req.body ?? {});
@@ -127,12 +143,16 @@ export async function buildServer() {
     }
     try {
       const session = await sessions.create(parsed.data);
+      const delivery = config.routes.default.notify.includes("twilio")
+        ? await sessions.getTelephonyDelivery(session.id)
+        : null;
       return reply.code(201).send({
         id: session.id,
         status: session.status,
         created_at: session.createdAt,
         join_url: session.joinUrl,
         objective: session.objective,
+        ...(delivery ? { delivery } : {}),
         links: { self: `/v1/sessions/${session.id}` },
       });
     } catch (error) {
@@ -140,6 +160,14 @@ export async function buildServer() {
         error: error instanceof Error ? error.message : "Invalid session",
       });
     }
+  });
+
+  app.get("/v1/sessions/:id/delivery/twilio", async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!sessions.get(id)) return reply.code(404).send({ error: "Session not found" });
+    const delivery = await sessions.getTelephonyDelivery(id);
+    if (!delivery) return reply.code(404).send({ error: "No phone delivery exists for this session" });
+    return delivery;
   });
 
   app.post("/v1/sessions", async (req, reply) => {
@@ -323,11 +351,20 @@ export async function buildServer() {
   const snoozeSweep = setInterval(() => {
     void sessions.wakeDueSnoozes();
   }, 15_000);
+  let telephonySweepRunning = false;
+  const telephonySweep = setInterval(() => {
+    if (telephonySweepRunning) return;
+    telephonySweepRunning = true;
+    void sessions.reconcileTelephonyDeliveries().finally(() => {
+      telephonySweepRunning = false;
+    });
+  }, 3_000);
 
   app.addHook("onClose", async () => {
     clearInterval(worker);
     clearInterval(expirySweep);
     clearInterval(snoozeSweep);
+    clearInterval(telephonySweep);
   });
 
   return { app, config, store, sessions };

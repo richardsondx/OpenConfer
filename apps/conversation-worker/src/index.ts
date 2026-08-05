@@ -171,7 +171,7 @@ const agent = defineAgent({
     });
     await session.generateReply({
       instructions:
-        "Open the call now with only a short, warm greeting. Use the operator's preferred name when provided, then stop and wait for their response. Do not state the objective or options yet.",
+        "Open the call now in English with only a short, warm greeting. Use the operator's preferred name when provided, then stop and wait for their response. Do not state the objective or options yet.",
     });
   },
 });

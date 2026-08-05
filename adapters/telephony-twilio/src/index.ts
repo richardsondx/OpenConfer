@@ -130,6 +130,32 @@ export function createTwilioTelephonyAdapter(
         };
       }
     },
+    async status(callId) {
+      if (!config.accountSid || !config.authToken) {
+        return { success: false, error: "Twilio credentials are not configured" };
+      }
+      try {
+        const response = await (dependencies.fetch ?? fetch)(
+          `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}/Calls/${encodeURIComponent(callId)}.json`,
+          {
+            headers: {
+              Authorization: `Basic ${Buffer.from(`${config.accountSid}:${config.authToken}`).toString("base64")}`,
+            },
+          },
+        );
+        if (!response.ok) throw new Error(await responseError(response));
+        const call = (await response.json()) as { status?: unknown };
+        return {
+          success: true,
+          status: typeof call.status === "string" ? call.status : "unknown",
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Could not read Twilio call status",
+        };
+      }
+    },
     async test() {
       const missing = missingConfiguration(config);
       return missing.length === 0

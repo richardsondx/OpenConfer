@@ -9,9 +9,10 @@
     "build": "turbo run build",
     "setup": "bash scripts/setup.sh",
     "dev": "turbo run dev --parallel",
-    "test": "turbo run test",
+    "test": "node --test scripts/version-info.test.mjs && turbo run test",
     "lint": "eslint --max-warnings=0 .",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "version:check": "node scripts/check-version.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

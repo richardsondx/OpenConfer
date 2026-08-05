@@ -77,6 +77,52 @@
   gap: var(--oc-space-2);
 }
 
+.phone-mode-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 2.25rem;
+  padding: 0 10px;
+  border: 1px solid var(--oc-surface-muted);
+  border-radius: 999px;
+  background: var(--oc-surface-raised);
+  color: var(--oc-text-muted);
+  font: inherit;
+  font-size: var(--oc-text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.phone-mode-status svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.phone-mode-status::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--oc-text-muted);
+  opacity: 0.55;
+}
+
+.phone-mode-status.is-enabled {
+  border-color: color-mix(in srgb, var(--oc-success) 28%, var(--oc-surface-muted));
+  background: color-mix(in srgb, var(--oc-success-muted) 48%, var(--oc-surface-raised));
+  color: var(--oc-success);
+}
+
+.phone-mode-status.is-enabled::after {
+  background: var(--oc-success);
+  opacity: 1;
+}
+
 .inbox-header h1 {
   margin: 0;
   font-size: var(--oc-text-2xl);
@@ -89,6 +135,102 @@
   flex-wrap: wrap;
   gap: var(--oc-space-3);
   margin-top: var(--oc-space-6);
+}
+
+.phone-call-feedback {
+  display: flex;
+  align-items: center;
+  gap: var(--oc-space-4);
+  margin-bottom: var(--oc-space-5);
+  padding: var(--oc-space-4) var(--oc-space-5);
+  border: 1px solid color-mix(in srgb, var(--oc-success) 30%, var(--oc-surface-muted));
+  border-radius: var(--oc-radius-md);
+  background: color-mix(in srgb, var(--oc-success-muted) 58%, var(--oc-surface-raised));
+  color: var(--oc-success);
+}
+
+.phone-call-feedback.is-failed {
+  border-color: color-mix(in srgb, var(--oc-danger) 35%, var(--oc-surface-muted));
+  background: color-mix(in srgb, var(--oc-danger-muted) 65%, var(--oc-surface-raised));
+  color: var(--oc-danger);
+}
+
+.phone-call-feedback-signal {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, var(--oc-surface-raised));
+}
+
+.phone-call-feedback-signal svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.phone-call-feedback-ring {
+  position: absolute;
+  inset: 0;
+  border: 1px solid currentColor;
+  border-radius: inherit;
+  animation: phone-call-pulse 1.6s ease-out infinite;
+}
+
+.phone-call-feedback.is-completed .phone-call-feedback-ring,
+.phone-call-feedback.is-failed .phone-call-feedback-ring {
+  animation: none;
+  opacity: 0;
+}
+
+@keyframes phone-call-pulse {
+  from { opacity: 0.45; transform: scale(0.82); }
+  to { opacity: 0; transform: scale(1.45); }
+}
+
+.phone-call-feedback-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.phone-call-feedback-copy strong {
+  color: var(--oc-text);
+  font-size: var(--oc-text-sm);
+}
+
+.phone-call-feedback-copy span {
+  font-size: var(--oc-text-sm);
+}
+
+.phone-call-feedback-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--oc-space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .phone-call-feedback {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .phone-call-feedback-actions {
+    width: 100%;
+    justify-content: flex-start;
+    padding-left: 58px;
+  }
 }
 
 .incoming-call-banner {

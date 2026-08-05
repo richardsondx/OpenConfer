@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxPage } from "./InboxPage";
 import { mockConversation } from "../lib/settings-fixtures";
@@ -69,12 +69,57 @@ const openSession = {
   join_url: "http://127.0.0.1:5173/join/ses_open1#token=x",
 };
 
-function stubFetch(sessions: unknown[] = []) {
+const waitingSession = {
+  id: "ses_waiting1",
+  type: "decision",
+  status: "waiting",
+  objective: "Choose the launch window",
+  brief: { reason: "Launch decision" },
+  initiator: { agent_id: "release-agent", harness: "hermes" },
+  join_url: "http://127.0.0.1:5173/join/ses_waiting1#token=x",
+};
+
+const phoneSettingsPayload = {
+  ...settingsPayload,
+  routes: {
+    ...settingsPayload.routes,
+    default: { ...settingsPayload.routes.default, notify: ["secure_link", "twilio"] },
+  },
+  status: {
+    ...settingsPayload.status,
+    livekit: "ready",
+    twilio: "ready",
+    speaking_agent: "ready",
+    voice_ready: true,
+  },
+};
+
+function stubFetch(
+  sessions: unknown[] = [],
+  settings: typeof settingsPayload = settingsPayload,
+  phoneDelivery: { status: string; provider_status?: string; session_ended?: boolean } = {
+    status: "succeeded",
+    provider_status: "ringing",
+  },
+) {
   const list = [...sessions];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes("/v1/sessions/demo") && init?.method === "POST") {
+        const created = { ...demoSession, status: "notified", summary: undefined, result: undefined };
+        list.unshift(created);
+        return new Response(JSON.stringify(created), { status: 201 });
+      }
+      if (url.includes("/delivery/twilio")) {
+        if (phoneDelivery.session_ended) {
+          const id = url.split("/v1/sessions/")[1]?.split("/")[0];
+          const index = list.findIndex((session) => (session as { id: string }).id === id);
+          if (index >= 0) list[index] = { ...(list[index] as object), status: "cancelled" };
+        }
+        return new Response(JSON.stringify(phoneDelivery), { status: 200 });
+      }
       if (url.includes("/v1/sessions/") && url.endsWith("/cancel") && init?.method === "POST") {
         const id = url.split("/v1/sessions/")[1]?.split("/")[0];
         const index = list.findIndex((session) => (session as { id: string }).id === id);
@@ -87,11 +132,16 @@ function stubFetch(sessions: unknown[] = []) {
         return new Response(JSON.stringify({ sessions: list }), { status: 200 });
       }
       if (url.includes("/v1/settings")) {
-        return new Response(JSON.stringify(settingsPayload), { status: 200 });
+        return new Response(JSON.stringify(settings), { status: 200 });
       }
       return new Response(JSON.stringify({ error: "missing mock" }), { status: 500 });
     }),
   );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="current path">{location.pathname}</output>;
 }
 
 describe("InboxPage", () => {
@@ -239,6 +289,56 @@ describe("InboxPage", () => {
     expect(screen.getByText(/^cancelled$/i)).toBeInTheDocument();
     expect(container.querySelector(".session-row--ok")).toBeTruthy();
     expect(container.querySelector(".session-row--bad")).toBeTruthy();
+  });
+
+  it("uses phone mode as the primary workflow and keeps the secure link copyable", async () => {
+    stubFetch([waitingSession], phoneSettingsPayload);
+    sessionStorage.setItem("oc_token", "oc_test_token");
+    localStorage.setItem("oc_agent_connected", "1");
+
+    render(
+      <MemoryRouter>
+        <LocationProbe />
+        <InboxPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("button", { name: /phone calls enabled/i })).toHaveClass("is-enabled");
+    expect(screen.queryByRole("button", { name: /^answer$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /choose the launch window/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /copy secure link for.*choose the launch window/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^test call$/i }));
+
+    expect(await screen.findByText(/call requested/i)).toBeInTheDocument();
+    expect(await screen.findByText(/your phone is ringing/i, {}, { timeout: 3_000 })).toBeInTheDocument();
+    expect(screen.getByLabelText("current path")).toHaveTextContent("/");
+    expect(fetch).toHaveBeenCalledWith(
+      "/v1/sessions/demo",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("refreshes the session as ended when a phone call finishes without a decision", async () => {
+    stubFetch([waitingSession], phoneSettingsPayload, {
+      status: "succeeded",
+      provider_status: "completed",
+      session_ended: true,
+    });
+    sessionStorage.setItem("oc_token", "oc_test_token");
+    localStorage.setItem("oc_agent_connected", "1");
+
+    render(
+      <MemoryRouter>
+        <InboxPage />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("button", { name: /phone calls enabled/i });
+    fireEvent.click(screen.getByRole("button", { name: /^test call$/i }));
+
+    expect(await screen.findByText(/session ended automatically/i, {}, { timeout: 3_000 })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/^cancelled$/i)).toBeInTheDocument());
   });
 
   it("shows type-aware labels and shape cues for standup, approval, and research rows", async () => {

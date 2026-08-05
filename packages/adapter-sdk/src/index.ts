@@ -35,6 +35,12 @@ export interface TelephonyCallResult {
   error?: string;
 }
 
+export interface TelephonyCallStatusResult {
+  success: boolean;
+  status?: string;
+  error?: string;
+}
+
 /**
  * Connects a conventional phone call to an already-created conversation room.
  * Keeping this separate from ConversationAdapter lets agent harnesses continue
@@ -43,6 +49,7 @@ export interface TelephonyCallResult {
 export interface TelephonyAdapter {
   readonly name: string;
   call(session: ConferSession, room: ConversationRoom): Promise<TelephonyCallResult>;
+  status?(callId: string): Promise<TelephonyCallStatusResult>;
   test?(): Promise<{ ok: boolean; message: string }>;
 }
 

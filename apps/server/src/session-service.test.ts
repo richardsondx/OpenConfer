@@ -126,7 +126,88 @@ describe("SessionService lifecycle and idempotency", () => {
     });
   });
 
-  it("keeps a session notified when Twilio fails but secure link succeeds", async () => {
+  it.each(["busy", "failed", "no-answer", "canceled", "completed"])(
+    "ends a waiting phone session when Twilio reports %s",
+    async (providerStatus) => {
+      const telephony: TelephonyAdapter = {
+        name: "twilio",
+        call: async () => ({ success: true, channel: "twilio", callId: "CA-terminal" }),
+        status: async () => ({ success: true, status: providerStatus }),
+        test: async () => ({ ok: true, message: "ready" }),
+      };
+      const conversation: ConversationAdapter = {
+        name: "test",
+        createRoom: async (session) => ({ roomName: `confer-${session.id}` }),
+        endRoom,
+      };
+      const config = configFor(dir);
+      config.conversation.realtime.api_key = "test-openai-key";
+      config.routes.default.notify = ["twilio", "secure_link"];
+      const twilioService = new SessionService(
+        store,
+        config,
+        "test-jwt-secret-with-sufficient-entropy",
+        conversation,
+        telephony,
+      );
+
+      const created = await twilioService.create({
+        ...baseInput,
+        idempotency_key: `twilio-terminal-${providerStatus}`,
+      });
+      const delivery = await twilioService.getTelephonyDelivery(created.id);
+
+      expect(delivery).toMatchObject({
+        provider_status: providerStatus,
+        session_status: "cancelled",
+        session_ended: true,
+      });
+      expect(store.getById(created.id)?.status).toBe("cancelled");
+      expect(endRoom).toHaveBeenCalledWith(created.id);
+    },
+  );
+
+  it("allows the phone voice agent to complete a waiting session", async () => {
+    const created = await service.create({ ...baseInput, idempotency_key: "voice-confirm" });
+
+    const completed = service.confirm(
+      created.id,
+      { approved: true },
+      "Approved by phone",
+      "voice_agent",
+    );
+
+    expect(completed?.status).toBe("completed");
+    expect(completed?.humanConfirmation?.method).toBe("voice_agent");
+  });
+
+  it("reconciles and ends terminal phone calls without a browser poll", async () => {
+    const telephony: TelephonyAdapter = {
+      name: "twilio",
+      call: async () => ({ success: true, channel: "twilio", callId: "CA-background" }),
+      status: async () => ({ success: true, status: "no-answer" }),
+      test: async () => ({ ok: true, message: "ready" }),
+    };
+    const config = configFor(dir);
+    config.conversation.realtime.api_key = "test-openai-key";
+    config.routes.default.notify = ["twilio", "secure_link"];
+    const twilioService = new SessionService(
+      store,
+      config,
+      "test-jwt-secret-with-sufficient-entropy",
+      undefined,
+      telephony,
+    );
+    const created = await twilioService.create({
+      ...baseInput,
+      idempotency_key: "twilio-background-terminal",
+    });
+
+    expect(await twilioService.reconcileTelephonyDeliveries()).toBe(1);
+    expect(store.getById(created.id)?.status).toBe("cancelled");
+  });
+
+  it("marks phone-primary delivery failed when Twilio fails even if a secure link exists", async () => {
     const telephony: TelephonyAdapter = {
       name: "twilio",
       call: async () => ({ success: false, channel: "twilio", error: "dial failed" }),
@@ -149,7 +230,7 @@ describe("SessionService lifecycle and idempotency", () => {
     );
 
     const created = await twilioService.create({ ...baseInput, idempotency_key: "twilio-fallback" });
-    expect(created.status).toBe("notified");
+    expect(created.status).toBe("failed");
     expect(store.getChannelDelivery(created.id, "twilio")).toMatchObject({
       status: "failed",
       error: "dial failed",

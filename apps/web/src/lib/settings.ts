@@ -6,6 +6,15 @@ export type TwilioStatus = "ready" | "missing_config" | "needs_livekit_voice" | 
 export type LiveKitCredentialSource = "none" | "local_defaults" | "custom";
 export type SpeakingMode = "realtime" | "pipeline";
 export type SpeakingPreset = "live" | "flexible" | "local" | "custom";
+export type SettingsSecretName =
+  | "twilio_account_sid"
+  | "twilio_auth_token"
+  | "realtime_api_key"
+  | "stt_api_key"
+  | "llm_api_key"
+  | "tts_api_key"
+  | "livekit_api_key"
+  | "livekit_api_secret";
 
 export type ProviderBlockView = {
   provider: string;
@@ -289,6 +298,23 @@ export async function patchSettings(token: string, patch: SettingsPatch): Promis
   return res.json();
 }
 
+export async function revealSettingsSecret(token: string, name: SettingsSecretName): Promise<string> {
+  const res = await fetch("/v1/settings/secrets/reveal", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+    throw new Error(typeof body.error === "string" ? body.error : "Could not reveal the saved secret.");
+  }
+  const body = (await res.json()) as { value: string };
+  return body.value;
+}
+
 export async function rotateApiToken(token: string): Promise<{ api_token: string; settings: SettingsView }> {
   const res = await fetch("/v1/settings/token/rotate", {
     method: "POST",
@@ -330,7 +356,12 @@ export const DEMO_USE_CASES: ReadonlyArray<{
 export async function createDemoSession(
   token: string,
   useCase: DemoUseCase = "decision",
-): Promise<{ id: string; join_url?: string; status: string }> {
+): Promise<{
+  id: string;
+  join_url?: string;
+  status: string;
+  delivery?: PhoneDelivery;
+}> {
   const res = await fetch("/v1/sessions/demo", {
     method: "POST",
     headers: {
@@ -342,6 +373,25 @@ export async function createDemoSession(
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: unknown };
     throw new Error(typeof body.error === "string" ? body.error : "Could not start the sandbox test call.");
+  }
+  return res.json();
+}
+
+export interface PhoneDelivery {
+  status: string;
+  provider_status?: string;
+  error?: string;
+  session_status?: string;
+  session_ended?: boolean;
+}
+
+export async function fetchPhoneDelivery(token: string, sessionId: string): Promise<PhoneDelivery> {
+  const res = await fetch(`/v1/sessions/${encodeURIComponent(sessionId)}/delivery/twilio`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+    throw new Error(typeof body.error === "string" ? body.error : "Could not check the phone call.");
   }
   return res.json();
 }

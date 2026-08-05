@@ -23,6 +23,7 @@ export function GetStarted({
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [joinPaste, setJoinPaste] = useState("");
 
   const createDemo = async (useCase: DemoUseCase) => {
@@ -32,10 +33,17 @@ export function GetStarted({
     }
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const session = await createDemoSession(token, useCase);
       onSessionCreated();
-      if (session.join_url) {
+      if (phonePrimary) {
+        if (session.delivery?.status === "failed" || session.status === "failed") {
+          setError(session.delivery?.error ?? "Twilio could not place the call.");
+        } else {
+          setNotice("Call requested. Waiting for your phone to ring…");
+        }
+      } else if (session.join_url) {
         navigate(joinPathFromUrl(session.join_url));
       }
     } catch (e) {
@@ -63,6 +71,7 @@ export function GetStarted({
   const speakingReady =
     settings?.status.speaking_agent === "ready" || settings?.status.openai_worker === "ready";
   const voiceReady = settings?.status.voice_ready === true;
+  const phonePrimary = settings?.routes.default.notify.includes("twilio") === true;
   const speakingSummary = settings?.conversation.speaking_summary;
   const voiceBadge =
     voiceReady
@@ -122,8 +131,9 @@ export function GetStarted({
             </Badge>
           </div>
           <p>
-            No Hermes or agent required. Pick a familiar scenario so you can join LiveKit and hear
-            the speaking agent before wiring real work.
+            {phonePrimary
+              ? "No Hermes or agent required. Pick a familiar scenario and we'll call your phone."
+              : "No Hermes or agent required. Pick a familiar scenario so you can join LiveKit and hear the speaking agent before wiring real work."}
           </p>
           <TestCallPicker
             id="get-started-test-call-use-case"
@@ -152,6 +162,11 @@ export function GetStarted({
       {error && (
         <div className="alert alert-warning" role="alert">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div className="alert alert-success" role="status">
+          {notice}
         </div>
       )}
 

@@ -71,4 +71,20 @@ describe("Twilio telephony adapter", () => {
     expect(result.error).toBe("The destination number is invalid");
     expect(result.error).not.toContain(config.authToken);
   });
+
+  it("reads the live Twilio call status", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      new Response(JSON.stringify({ status: "ringing" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const adapter = createTwilioTelephonyAdapter(config, { fetch: fetchMock });
+
+    await expect(adapter.status?.("CA123")).resolves.toEqual({
+      success: true,
+      status: "ringing",
+    });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/Calls/CA123.json");
+  });
 });

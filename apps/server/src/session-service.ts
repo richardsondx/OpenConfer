@@ -486,7 +486,7 @@ export class SessionService {
     if (!session) return null;
 
     const allowedStatuses =
-      method === "text_form"
+      method === "text_form" || method === "voice_agent"
         ? ["notified", "snoozed", "joining", "active", "confirming"]
         : ["joining", "active", "confirming"];
     if (!allowedStatuses.includes(session.status)) return null;
@@ -497,9 +497,9 @@ export class SessionService {
     }
 
     if (session.status === "notified" || session.status === "snoozed") {
-      this.store.transitionWithEvent(id, session.status, "joining", "session.joining", { via: "text_form" });
+      this.store.transitionWithEvent(id, session.status, "joining", "session.joining", { via: method });
       this.store.update(id, { snoozeUntil: undefined, operatorSeenAt: undefined });
-      this.store.transitionWithEvent(id, "joining", "active", "session.active", { via: "text_form" });
+      this.store.transitionWithEvent(id, "joining", "active", "session.active", { via: method });
     }
 
     if (session.status === "joining") {
@@ -548,7 +548,7 @@ export class SessionService {
     return this.store.acknowledgeResult(id, session.status as "completed" | "result_delivered", runId);
   }
 
-  cancel(id: string): ConferSession | null {
+  cancel(id: string, reason?: string): ConferSession | null {
     const session = this.store.getById(id);
     if (!session) return null;
     const nonCancellable = [
@@ -563,12 +563,64 @@ export class SessionService {
     ];
     if (nonCancellable.includes(session.status)) return null;
     try {
-      const updated = this.store.transitionWithEvent(id, session.status, "cancelled", "session.cancelled", {});
+      const updated = this.store.transitionWithEvent(
+        id,
+        session.status,
+        "cancelled",
+        "session.cancelled",
+        reason ? { reason } : {},
+      );
       void this.conversation.endRoom(id);
       return updated;
     } catch {
       return null;
     }
+  }
+
+  async getTelephonyDelivery(id: string) {
+    const delivery = this.store.getChannelDelivery(id, "twilio");
+    if (!delivery) return null;
+    let providerStatus: string | undefined;
+    let providerError: string | undefined;
+    if (delivery.status === "succeeded" && delivery.externalId && this.telephony.status) {
+      const result = await this.telephony.status(delivery.externalId);
+      providerStatus = result.status;
+      providerError = result.success ? undefined : result.error;
+    }
+    const terminalFailure =
+      providerStatus && ["busy", "failed", "no-answer", "canceled"].includes(providerStatus);
+    const current = this.store.getById(id);
+    const endedWithoutDecision =
+      providerStatus === "completed" &&
+      current !== null &&
+      ["notified", "snoozed"].includes(current.status);
+    let endedSession = false;
+    if (terminalFailure || endedWithoutDecision) {
+      endedSession = Boolean(this.cancel(id, `Twilio call ${providerStatus}`));
+    }
+    return {
+      status: delivery.status,
+      provider_status: providerStatus,
+      error: delivery.error ?? providerError,
+      session_status: this.store.getById(id)?.status,
+      session_ended: endedSession,
+    };
+  }
+
+  /** Reconcile open phone sessions even when no browser is polling their call status. */
+  async reconcileTelephonyDeliveries(): Promise<number> {
+    const openStatuses = new Set(["notified", "snoozed", "joining", "active", "confirming"]);
+    const candidates = this.store.list(100).filter((session) => {
+      if (!openStatuses.has(session.status)) return false;
+      const delivery = this.store.getChannelDelivery(session.id, "twilio");
+      return delivery?.status === "succeeded" && Boolean(delivery.externalId);
+    });
+    let ended = 0;
+    for (const session of candidates) {
+      const delivery = await this.getTelephonyDelivery(session.id);
+      if (delivery?.session_ended) ended += 1;
+    }
+    return ended;
   }
 
   decline(id: string, reason?: string): ConferSession | null {
@@ -652,12 +704,14 @@ export class SessionService {
     const channels = this.config.routes.default.notify;
     let lastSuccess: Awaited<ReturnType<typeof this.notifier.notify>> | undefined;
     let lastFailure: Awaited<ReturnType<typeof this.notifier.notify>> | undefined;
+    let phoneResult: TelephonyCallResult | undefined;
     for (const channel of channels) {
       const result = channel === "twilio"
         ? await this.dispatchTwilio(session)
         : channel === "secure_link"
           ? await this.notifier.notify(session, joinUrl)
           : { success: false as const, channel, error: `Unknown notification channel: ${channel}` };
+      if (channel === "twilio") phoneResult = result as TelephonyCallResult;
       if (result.success) {
         if (result.channel === "secure_link") console.info(result.message);
         lastSuccess = result;
@@ -665,7 +719,9 @@ export class SessionService {
         lastFailure = result;
       }
     }
-    return lastSuccess ?? lastFailure ?? { success: false, channel: "none", error: "No notifier configured" };
+    // When phone is selected, the secure link remains available for sharing but must not mask
+    // a failed primary phone delivery.
+    return phoneResult ?? lastSuccess ?? lastFailure ?? { success: false, channel: "none", error: "No notifier configured" };
   }
 
   private async dispatchTwilio(session: ConferSession): Promise<TelephonyCallResult> {

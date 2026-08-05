@@ -9,6 +9,7 @@ import {
   hermesSkillMarkdown,
   liveKitStatusLabel,
   patchSettings,
+  revealSettingsSecret,
   rotateApiToken,
   speakingStatusLabel,
   type SettingsPatch,
@@ -142,6 +143,7 @@ export function SettingsModal({
   onStartTestCall,
   testCallBusy = false,
   onTokenRotated,
+  onSettingsChanged,
 }: {
   token: string;
   open: boolean;
@@ -153,6 +155,7 @@ export function SettingsModal({
   onStartTestCall?: (useCase: DemoUseCase) => void;
   testCallBusy?: boolean;
   onTokenRotated?: (nextToken: string) => void;
+  onSettingsChanged?: (settings: SettingsView) => void;
 }) {
   const mapSection = (s: typeof initialSection): Section => {
     if (s === "overview") return "status";
@@ -352,6 +355,7 @@ export function SettingsModal({
         telephony: { adapter: "twilio", twilio },
       });
       setSettings(view);
+      onSettingsChanged?.(view);
       setTwilioAccountSid("");
       setTwilioAuthToken("");
       setMessage("Saved — how you're reached is updated");
@@ -522,10 +526,32 @@ export function SettingsModal({
         ? (settings?.conversation.speaking_mode ?? "pipeline")
         : "pipeline";
   const speakingSummary =
-    settings?.conversation.speaking_summary?.trim() ||
-    (speakingMode === "realtime"
+    speakingMode === "realtime"
       ? `OpenAI Realtime · ${realtimeModel} · ${realtimeVoice}`
-      : `${sttProvider}/${sttModel} → ${llmProvider}/${llmModel} → ${ttsProvider}/${ttsModel}`);
+      : `${sttProvider}/${sttModel} → ${llmProvider}/${llmModel} → ${ttsProvider}/${ttsModel}`;
+  const savedPreset = settings?.conversation.preset ?? "live";
+  const speakingSelectionChanged = Boolean(
+    settings &&
+      (preset !== savedPreset ||
+        realtimeModel !==
+          (settings.conversation.realtime?.model || settings.conversation.model || "gpt-realtime") ||
+        realtimeVoice !==
+          (settings.conversation.realtime?.voice || settings.conversation.voice || "marin") ||
+        (preset !== "live" &&
+          (sttProvider !== (settings.conversation.stt?.provider || "deepgram") ||
+            sttModel !== (settings.conversation.stt?.model || "nova-3") ||
+            llmProvider !== (settings.conversation.llm?.provider || "openrouter") ||
+            llmModel !== (settings.conversation.llm?.model || "openai/gpt-4o-mini") ||
+            llmBaseUrl !== (settings.conversation.llm?.base_url || "") ||
+            ttsProvider !== (settings.conversation.tts?.provider || "cartesia") ||
+            ttsModel !== (settings.conversation.tts?.model || "sonic-3") ||
+            ttsVoice !== (settings.conversation.tts?.voice || "")))),
+  );
+  const selectedPresetLabel =
+    SPEAKING_PRESETS.find((option) => option.value === preset)?.label.replace(" (recommended)", "") ??
+    preset;
+  const testCallUsesSelectedSpeakingAgent =
+    voiceReady && !speakingSelectionChanged && !settings?.status.restart_required;
 
   return (
     <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="Settings">
@@ -545,6 +571,23 @@ export function SettingsModal({
               </button>
             ))}
           </nav>
+          <div
+            className={`settings-version is-${__OPENCONFER_BUILD__.channel}`}
+            title={
+              __OPENCONFER_BUILD__.channel === "release"
+                ? `Release ${__OPENCONFER_BUILD__.tag}`
+                : `Development build ${__OPENCONFER_BUILD__.commit}; targeting v${__OPENCONFER_BUILD__.version}`
+            }
+            aria-label={
+              __OPENCONFER_BUILD__.channel === "release"
+                ? `OpenConfer version ${__OPENCONFER_BUILD__.version}`
+                : `OpenConfer version ${__OPENCONFER_BUILD__.version}, development build`
+            }
+          >
+            <span className="settings-version-dot" aria-hidden="true" />
+            v{__OPENCONFER_BUILD__.version}
+            {__OPENCONFER_BUILD__.channel === "development" && <small>dev</small>}
+          </div>
           <Button type="button" variant="ghost" onClick={onClose}>
             Close
           </Button>
@@ -697,39 +740,42 @@ export function SettingsModal({
               <h2>
                 How you're reached{" "}
                 <Tip label="What does this control?">
-                  Every agent request appears in this inbox with a secure link you can open or copy.
-                  Phone calls are optional.
+                  Choose where you answer by default. Every request still gets a secure link you can copy.
                 </Tip>
               </h2>
-              <label className="settings-check">
-                <input type="checkbox" checked disabled readOnly />
-                <span>
-                  <strong>Inbox with copyable secure links</strong>
-                  <small>Always on. Use Copy link beside any session to share or save its join link.</small>
-                </span>
-              </label>
-              <label className="settings-check">
-                <input
-                  type="checkbox"
-                  checked={notifyTwilio}
-                  onChange={(e) => setNotifyTwilio(e.target.checked)}
-                />
-                <span>
-                  <strong>
-                    Phone call <Badge variant="active">Twilio</Badge>
-                  </strong>
-                  <small>
-                    Automatically calls your phone and connects it to the current LiveKit voice agent.
-                    Status: {settings.status.twilio === "ready"
-                      ? "ready"
-                      : settings.status.twilio === "missing_config"
-                        ? "needs Twilio setup"
-                        : settings.status.twilio === "needs_livekit_voice"
-                          ? "needs LiveKit voice"
-                          : "off"}.
-                  </small>
-                </span>
-              </label>
+              <fieldset className="settings-delivery-options">
+                <legend>Primary answer method</legend>
+                <label className={`settings-delivery-option${!notifyTwilio ? " is-selected" : ""}`}>
+                  <input
+                    type="radio"
+                    name="primary-answer-method"
+                    value="browser"
+                    checked={!notifyTwilio}
+                    onChange={() => setNotifyTwilio(false)}
+                  />
+                  <span>
+                    <strong>Browser</strong>
+                    <small>Answer incoming calls in this browser.</small>
+                  </span>
+                </label>
+                <label className={`settings-delivery-option${notifyTwilio ? " is-selected" : ""}`}>
+                  <input
+                    type="radio"
+                    name="primary-answer-method"
+                    value="phone"
+                    checked={notifyTwilio}
+                    onChange={() => setNotifyTwilio(true)}
+                  />
+                  <span>
+                    <strong>
+                      Phone call <Badge variant="active">Twilio</Badge>
+                    </strong>
+                    <small>
+                      Receive calls on your phone.
+                    </small>
+                  </span>
+                </label>
+              </fieldset>
               {notifyTwilio && (
                 <div className="settings-channel-config" aria-label="Twilio phone call setup">
                   <SecretField
@@ -739,6 +785,7 @@ export function SettingsModal({
                     onChange={setTwilioAccountSid}
                     placeholder="AC…"
                     savedPreview={settings.telephony.twilio.account_sid_preview}
+                    onReveal={() => revealSettingsSecret(activeToken, "twilio_account_sid")}
                   />
                   <SecretField
                     id="twilio-auth-token"
@@ -747,6 +794,7 @@ export function SettingsModal({
                     onChange={setTwilioAuthToken}
                     placeholder="Paste the Auth Token from Twilio"
                     savedPreview={settings.telephony.twilio.auth_token_preview}
+                    onReveal={() => revealSettingsSecret(activeToken, "twilio_auth_token")}
                   />
                   <label className="field-label" htmlFor="twilio-from-number">
                     Twilio phone number
@@ -1006,15 +1054,19 @@ export function SettingsModal({
                 <div>
                   <strong>Sandbox test call</strong>
                   <p className="settings-hint">
-                    {voiceReady
-                      ? `No agent required. Practice a voice session with ${speakingSummary}.`
-                      : "Needs a running LiveKit room and speaking credentials. Save below, then restart openconfer serve."}
+                    {speakingSelectionChanged
+                      ? `Save the selected ${selectedPresetLabel} setup, then restart openconfer serve before testing ${speakingSummary}.`
+                      : settings.status.restart_required
+                        ? `Restart openconfer serve to test the saved ${selectedPresetLabel} setup: ${speakingSummary}.`
+                        : voiceReady
+                          ? `Test the active ${selectedPresetLabel} speaking agent: ${speakingSummary}.`
+                          : "Needs a running LiveKit room and speaking credentials. Save below, then restart openconfer serve."}
                   </p>
                 </div>
                 <TestCallPicker
                   id="settings-test-call-use-case"
                   busy={testCallBusy}
-                  voiceReady={voiceReady}
+                  voiceReady={testCallUsesSelectedSpeakingAgent}
                   buttonVariant="secondary"
                   onStartTestCall={(useCase) => onStartTestCall?.(useCase)}
                 />
@@ -1085,6 +1137,7 @@ export function SettingsModal({
                             SAVED_SECRET_PREVIEW
                           : undefined
                       }
+                      onReveal={() => revealSettingsSecret(activeToken, "realtime_api_key")}
                     />
                     <label className="field-label" htmlFor="realtime-model">
                       Realtime model
@@ -1157,6 +1210,7 @@ export function SettingsModal({
                           ? settings.conversation.stt.api_key_preview || SAVED_SECRET_PREVIEW
                           : undefined
                       }
+                      onReveal={() => revealSettingsSecret(activeToken, "stt_api_key")}
                     />
 
                     <label className="field-label" htmlFor="llm-provider">
@@ -1231,6 +1285,7 @@ export function SettingsModal({
                             ? settings.conversation.llm.api_key_preview || SAVED_SECRET_PREVIEW
                             : undefined
                         }
+                        onReveal={() => revealSettingsSecret(activeToken, "llm_api_key")}
                       />
                     )}
 
@@ -1292,6 +1347,7 @@ export function SettingsModal({
                           ? settings.conversation.tts.api_key_preview || SAVED_SECRET_PREVIEW
                           : undefined
                       }
+                      onReveal={() => revealSettingsSecret(activeToken, "tts_api_key")}
                     />
                   </>
                 )}
@@ -1364,6 +1420,7 @@ export function SettingsModal({
                         (livekitLocalDefaults ? "…vkey" : SAVED_SECRET_PREVIEW)
                       : undefined
                   }
+                  onReveal={() => revealSettingsSecret(activeToken, "livekit_api_key")}
                 />
                 <SecretField
                   id="lk-secret"
@@ -1379,6 +1436,7 @@ export function SettingsModal({
                         : SAVED_SECRET_PREVIEW
                       : undefined
                   }
+                  onReveal={() => revealSettingsSecret(activeToken, "livekit_api_secret")}
                 />
               </details>
 

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SecretField } from "./SecretField";
 
@@ -34,6 +34,23 @@ describe("SecretField", () => {
     const input = screen.getByLabelText(/api secret/i) as HTMLInputElement;
     expect(input).toHaveAttribute("type", "text");
     expect(input.value).toBe("…cret");
+  });
+
+  it("loads and reveals the complete saved secret when available", async () => {
+    const onReveal = vi.fn().mockResolvedValue("complete-saved-secret");
+    render(
+      <SecretField
+        label="API secret"
+        value=""
+        onChange={vi.fn()}
+        savedPreview="…cret"
+        onReveal={onReveal}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /show secret/i }));
+    await waitFor(() => expect(screen.getByLabelText(/api secret/i)).toHaveValue("complete-saved-secret"));
+    expect(onReveal).toHaveBeenCalledOnce();
   });
 
   it("replaces the stand-in when the user types a new value", () => {

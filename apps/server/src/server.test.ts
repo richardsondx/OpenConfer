@@ -267,6 +267,16 @@ describe.sequential("server API", () => {
     expect(patched.json().telephony.twilio.auth_token).toBeUndefined();
     expect(["ready", "needs_livekit_voice"]).toContain(patched.json().status.twilio);
 
+    const revealed = await app.inject({
+      method: "POST",
+      url: "/v1/settings/secrets/reveal",
+      headers,
+      payload: { name: "twilio_auth_token" },
+    });
+    expect(revealed.statusCode).toBe(200);
+    expect(revealed.headers["cache-control"]).toBe("no-store");
+    expect(revealed.json()).toEqual({ value: "twilio-test-secret" });
+
     const { readFileSync } = await import("node:fs");
     const yaml = readFileSync(process.env.OPENCONFER_CONFIG!, "utf8");
     expect(yaml).toContain("twilio-test-secret");

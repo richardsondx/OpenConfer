@@ -41,7 +41,7 @@ function settings(): SettingsView {
 describe("SettingsModal Twilio phone channel", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("ties the Phone call checkbox directly to the twilio notification route", async () => {
+  it("uses exclusive answer-method radios while preserving secure links", async () => {
     let current = settings();
     const patches: SettingsPatch[] = [];
     vi.stubGlobal(
@@ -80,8 +80,13 @@ describe("SettingsModal Twilio phone channel", () => {
       />,
     );
 
-    const phone = await screen.findByRole("checkbox", { name: /phone call/i });
+    const browser = await screen.findByRole("radio", { name: /browser/i });
+    const phone = screen.getByRole("radio", { name: /phone call/i });
+    expect(browser).toBeChecked();
+    expect(phone).not.toBeChecked();
     fireEvent.click(phone);
+    expect(phone).toBeChecked();
+    expect(browser).not.toBeChecked();
     expect(screen.getByLabelText("Twilio Account SID")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
@@ -89,9 +94,84 @@ describe("SettingsModal Twilio phone channel", () => {
     expect(patches[0]?.routes?.default?.notify).toEqual(["secure_link", "twilio"]);
     expect(patches[0]?.telephony?.adapter).toBe("twilio");
 
-    fireEvent.click(phone);
+    fireEvent.click(browser);
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(patches).toHaveLength(2));
     expect(patches[1]?.routes?.default?.notify).toEqual(["secure_link"]);
+  });
+});
+
+describe("SettingsModal app version", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows the target version and identifies development builds", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify(settings()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    render(<SettingsModal token="oc_test" open onClose={() => undefined} />);
+
+    expect(await screen.findByLabelText(/OpenConfer version 0\.1\.0, development build/i)).toHaveTextContent(
+      "v0.1.0dev",
+    );
+  });
+});
+
+describe("SettingsModal sandbox test call", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("does not imply an unsaved speaking preset will be used", async () => {
+    const current = settings();
+    current.status = {
+      ...current.status,
+      livekit: "ready",
+      openai_worker: "ready",
+      speaking_agent: "ready",
+      voice_ready: true,
+    };
+    current.conversation = mockConversation({ missing_credentials: [] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify(current), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    render(
+      <SettingsModal
+        token="oc_test"
+        open
+        initialSection="voice"
+        onClose={() => undefined}
+        onStartTestCall={() => undefined}
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        "Test the active Live speaking agent: OpenAI Realtime · gpt-realtime · marin.",
+      ),
+    ).toBeInTheDocument();
+    const start = screen.getByRole("button", { name: /start test call/i });
+    expect(start).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText("Preset"), { target: { value: "flexible" } });
+
+    expect(
+      screen.getByText(
+        "Save the selected Flexible setup, then restart openconfer serve before testing deepgram/nova-3 → openrouter/openai/gpt-4o-mini → cartesia/sonic-3.",
+      ),
+    ).toBeInTheDocument();
+    expect(start).toBeDisabled();
+    expect(screen.queryByText(/No agent required/)).not.toBeInTheDocument();
   });
 });

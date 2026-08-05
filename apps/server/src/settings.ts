@@ -32,6 +32,19 @@ export type TwilioStatus = "ready" | "missing_config" | "needs_livekit_voice" | 
 /** Where LiveKit credentials came from — local serve defaults are not "user pasted keys". */
 export type LiveKitCredentialSource = "none" | "local_defaults" | "custom";
 
+export const SETTINGS_SECRET_NAMES = [
+  "twilio_account_sid",
+  "twilio_auth_token",
+  "realtime_api_key",
+  "stt_api_key",
+  "llm_api_key",
+  "tts_api_key",
+  "livekit_api_key",
+  "livekit_api_secret",
+] as const;
+
+export type SettingsSecretName = (typeof SETTINGS_SECRET_NAMES)[number];
+
 /** Matches apps/cli local LiveKit --dev container credentials. */
 export const LOCAL_LIVEKIT_DEFAULTS = {
   url: "ws://127.0.0.1:7880",
@@ -307,6 +320,34 @@ export async function resolveLiveKitStatus(config: OpenConferConfig): Promise<Li
 
 export function isSpeakingConfigured(config: OpenConferConfig): boolean {
   return resolveSpeakingReady(config.conversation) === "ready";
+}
+
+/** Resolve a saved credential only for the authenticated, explicit reveal endpoint. */
+export function revealSettingsSecret(
+  config: OpenConferConfig,
+  name: SettingsSecretName,
+): string | undefined {
+  const conversation = ensureSpeakingShape(config).conversation;
+  switch (name) {
+    case "twilio_account_sid":
+      return config.telephony?.twilio?.account_sid;
+    case "twilio_auth_token":
+      return config.telephony?.twilio?.auth_token;
+    case "realtime_api_key":
+      return resolveRealtimeApiKey(conversation);
+    case "stt_api_key":
+      return resolveSttApiKey(conversation.stt);
+    case "llm_api_key": {
+      const value = resolveLlmApiKey(conversation.llm);
+      return value === "ollama" ? undefined : value;
+    }
+    case "tts_api_key":
+      return resolveTtsApiKey(conversation.tts);
+    case "livekit_api_key":
+      return conversation.livekit_api_key;
+    case "livekit_api_secret":
+      return conversation.livekit_api_secret;
+  }
 }
 
 export async function toSettingsView(config: OpenConferConfig): Promise<SettingsView> {

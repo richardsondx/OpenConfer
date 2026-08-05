@@ -14,6 +14,7 @@ import {
   cancelSession,
   createDemoSession,
   declineSession,
+  fetchPhoneDelivery,
   fetchSettings,
   joinPathFromUrl,
   readAgentConnected,
@@ -21,6 +22,7 @@ import {
   writeAgentConnected,
   type SettingsView,
   type DemoUseCase,
+  type PhoneDelivery,
 } from "../lib/settings";
 import { TestCallPicker } from "../components/TestCallPicker";
 import { LandingHero } from "../components/LandingHero";
@@ -69,6 +71,116 @@ function CopyCommand({ command, label }: { command: string; label: string }) {
         )}
       </button>
     </div>
+  );
+}
+
+function PhoneModeStatus({
+  enabled,
+  ready,
+  onClick,
+}: {
+  enabled: boolean;
+  ready: boolean;
+  onClick: () => void;
+}) {
+  const label = enabled
+    ? ready
+      ? "Phone calls enabled"
+      : "Phone calls need setup"
+    : "Phone calls disabled";
+  return (
+    <button
+      type="button"
+      className={`phone-mode-status${enabled && ready ? " is-enabled" : ""}`}
+      aria-label={label}
+      title={`${label}. Open how you're reached settings.`}
+      onClick={onClick}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7.2 3.5 4.8 5.9c-.8.8-.9 2-.4 3 2.3 4.8 6 8.5 10.8 10.8 1 .5 2.2.3 3-.4l2.3-2.3-4.1-4.1-2.2 1.6c-.4.3-.9.3-1.3 0a15.4 15.4 0 0 1-3.5-3.5c-.3-.4-.3-.9 0-1.3L11 7.6 7.2 3.5Z" />
+      </svg>
+      <span>Phone</span>
+    </button>
+  );
+}
+
+function normalizedPhoneStatus(delivery: PhoneDelivery): string {
+  if (delivery.status === "failed") return "failed";
+  if (delivery.error && !delivery.provider_status) return "failed";
+  return delivery.provider_status ?? "queued";
+}
+
+function isFinalPhoneStatus(status: string): boolean {
+  return ["completed", "busy", "failed", "no-answer", "canceled"].includes(status);
+}
+
+function PhoneCallFeedback({
+  delivery,
+  destination,
+  onRetry,
+  onOpenSettings,
+  onDismiss,
+}: {
+  delivery: PhoneDelivery & { sessionId?: string };
+  destination?: string;
+  onRetry: () => void;
+  onOpenSettings: () => void;
+  onDismiss: () => void;
+}) {
+  const status = normalizedPhoneStatus(delivery);
+  const failed = ["busy", "failed", "no-answer", "canceled"].includes(status);
+  const showSettings = failed || status === "completed";
+  const destinationHint = destination ? ` ending in ${destination.slice(-4)}` : "";
+  const copy = status === "starting"
+    ? { title: "Starting your test call", detail: "Connecting to Twilio…" }
+    : status === "queued"
+      ? { title: "Call requested", detail: `Waiting for your phone${destinationHint} to ring…` }
+      : status === "ringing"
+        ? { title: "Your phone is ringing", detail: "Answer it to join the test call." }
+        : status === "in-progress"
+          ? { title: "Call connected", detail: "You can continue the conversation on your phone." }
+          : status === "completed"
+            ? {
+                title: "Test call ended",
+                detail: delivery.session_ended
+                  ? "The call ended before a decision was recorded, so the session ended automatically."
+                  : "Twilio reports that the call connected and ended.",
+              }
+            : status === "busy"
+              ? { title: "Your phone was busy", detail: "The session ended automatically. Try again when the line is free." }
+              : status === "no-answer"
+                ? { title: "No answer", detail: "The session ended automatically. Check the number and try again." }
+                : status === "canceled"
+                  ? { title: "Call canceled", detail: "Twilio canceled the call and the session ended automatically." }
+                  : {
+                      title: "Call failed",
+                      detail: delivery.error
+                        ? `${delivery.error} The session ended automatically.`
+                        : "Twilio could not place the call. The session ended automatically.",
+                    };
+
+  return (
+    <section
+      className={`phone-call-feedback is-${failed ? "failed" : status}`}
+      role={failed ? "alert" : "status"}
+      aria-live="polite"
+    >
+      <div className="phone-call-feedback-signal" aria-hidden="true">
+        <span className="phone-call-feedback-ring" />
+        <svg viewBox="0 0 24 24">
+          <path d="M7.2 3.5 4.8 5.9c-.8.8-.9 2-.4 3 2.3 4.8 6 8.5 10.8 10.8 1 .5 2.2.3 3-.4l2.3-2.3-4.1-4.1-2.2 1.6c-.4.3-.9.3-1.3 0a15.4 15.4 0 0 1-3.5-3.5c-.3-.4-.3-.9 0-1.3L11 7.6 7.2 3.5Z" />
+        </svg>
+      </div>
+      <div className="phone-call-feedback-copy">
+        <strong>{copy.title}</strong>
+        <span>{copy.detail}</span>
+      </div>
+      <div className="phone-call-feedback-actions">
+        {failed && <Button type="button" onClick={onRetry}>Try again</Button>}
+        {showSettings && <Button type="button" variant="secondary" onClick={onOpenSettings}>Check phone settings</Button>}
+        <Button type="button" variant="ghost" onClick={onDismiss} aria-label="Dismiss call status">Dismiss</Button>
+      </div>
+    </section>
   );
 }
 
@@ -197,6 +309,8 @@ export function InboxPage() {
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [agentConnected, setAgentConnected] = useState(() => readAgentConnected());
   const [testCallBusy, setTestCallBusy] = useState(false);
+  const [phoneCallFeedback, setPhoneCallFeedback] = useState<(PhoneDelivery & { sessionId?: string }) | null>(null);
+  const [lastTestUseCase, setLastTestUseCase] = useState<DemoUseCase>("decision");
   const [endingId, setEndingId] = useState<string | null>(null);
   const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [endingOpen, setEndingOpen] = useState(false);
@@ -209,6 +323,7 @@ export function InboxPage() {
     () => normalizeAlertPrefs(settings?.operator?.alerts ?? DEFAULT_ALERT_PREFS),
     [settings?.operator?.alerts],
   );
+  const phonePrimary = settings?.routes.default.notify.includes("twilio") === true;
 
   const stopRing = useCallback(() => {
     ringHandleRef.current?.stop();
@@ -258,9 +373,13 @@ export function InboxPage() {
     return () => window.clearInterval(id);
   }, [token, needsToken, loadSessions]);
 
-  // Start ring when a Waiting session appears. Ignoring it (= ring ends) dismisses the banner;
-  // the session stays in the list until Answer / Snooze / Decline.
+  // In browser mode, start a local ring when a Waiting session appears. Phone-primary requests
+  // are handled by Twilio and remain copyable in the list without offering a browser Answer path.
   useEffect(() => {
+    if (!settings || phonePrimary) {
+      if (ringingSessionId) stopRing();
+      return;
+    }
     const candidate = sessions.find((s) => shouldRingSession(s));
     if (!candidate) {
       if (ringingSessionId) stopRing();
@@ -282,11 +401,52 @@ export function InboxPage() {
       },
     });
     setRingingSessionId(candidate.id);
-  }, [sessions, alertPrefs, ringingSessionId, stopRing]);
+  }, [sessions, settings, phonePrimary, alertPrefs, ringingSessionId, stopRing]);
 
   useEffect(() => () => {
     ringHandleRef.current?.stop();
   }, []);
+
+  useEffect(() => {
+    const sessionId = phoneCallFeedback?.sessionId;
+    if (!sessionId || isFinalPhoneStatus(normalizedPhoneStatus(phoneCallFeedback))) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let checks = 0;
+    const poll = async () => {
+      try {
+        const delivery = await fetchPhoneDelivery(token, sessionId);
+        if (cancelled) return;
+        checks += 1;
+        if (checks >= 30 && !isFinalPhoneStatus(normalizedPhoneStatus(delivery))) {
+          setPhoneCallFeedback({
+            status: "failed",
+            sessionId,
+            error: "Twilio has not confirmed the call. Check the saved number and try again.",
+          });
+          return;
+        }
+        setPhoneCallFeedback({ ...delivery, sessionId });
+        if (isFinalPhoneStatus(normalizedPhoneStatus(delivery))) {
+          await loadSessions({ quiet: true });
+        } else {
+          timer = window.setTimeout(() => void poll(), 2_000);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setPhoneCallFeedback({
+          status: "failed",
+          sessionId,
+          error: e instanceof Error ? e.message : "Could not check the phone call.",
+        });
+      }
+    };
+    timer = window.setTimeout(() => void poll(), 1_200);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [phoneCallFeedback?.sessionId, token, loadSessions]);
 
   useEffect(() => {
     if (!token || needsToken) {
@@ -398,16 +558,28 @@ export function InboxPage() {
       return;
     }
     setTestCallBusy(true);
+    setLastTestUseCase(useCase);
     setError(null);
+    if (phonePrimary) setPhoneCallFeedback({ status: "succeeded", provider_status: "starting" });
     try {
       const session = await createDemoSession(token, useCase);
       loadSessions();
       setSettingsOpen(false);
-      if (session.join_url) {
+      if (phonePrimary) {
+        setPhoneCallFeedback({
+          ...(session.delivery ?? {
+            status: session.status === "failed" ? "failed" : "succeeded",
+            ...(session.status === "failed" ? { error: "Twilio could not place the call." } : {}),
+          }),
+          sessionId: session.id,
+        });
+      } else if (session.join_url) {
         navigate(joinPathFromUrl(session.join_url));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start the sandbox test call.");
+      const message = e instanceof Error ? e.message : "Could not start the sandbox test call.";
+      if (phonePrimary) setPhoneCallFeedback({ status: "failed", error: message });
+      else setError(message);
     } finally {
       setTestCallBusy(false);
     }
@@ -460,6 +632,11 @@ export function InboxPage() {
       actions={
         !needsToken && token ? (
           <>
+            <PhoneModeStatus
+              enabled={phonePrimary}
+              ready={settings?.status.twilio === "ready"}
+              onClick={() => openSettings("alerts")}
+            />
             {sessions.length > 0 && (
               <TestCallPicker
                 id="inbox-test-call-use-case"
@@ -497,6 +674,16 @@ export function InboxPage() {
         <div className="alert alert-warning" role="alert">
           {error}
         </div>
+      )}
+
+      {phoneCallFeedback && !needsToken && (
+        <PhoneCallFeedback
+          delivery={phoneCallFeedback}
+          destination={settings?.telephony.twilio.destination_number}
+          onRetry={() => void startTestCall(lastTestUseCase)}
+          onOpenSettings={() => openSettings("alerts")}
+          onDismiss={() => setPhoneCallFeedback(null)}
+        />
       )}
 
       {!needsToken && ringingSession && (
@@ -567,7 +754,7 @@ export function InboxPage() {
                 key={s.id}
                 className={`session-row session-row--${outcome.tone}${isRinging ? " is-ringing" : ""}`}
               >
-                {s.join_url ? (
+                {s.join_url && !phonePrimary ? (
                   <Link
                     to={joinPathFromUrl(s.join_url, { autoJoin: open })}
                     className="session-row-link"
@@ -646,6 +833,7 @@ export function InboxPage() {
             sessionStorage.setItem("oc_token", next);
             setToken(next);
           }}
+          onSettingsChanged={setSettings}
         />
       )}
     </OperatorInboxShell>

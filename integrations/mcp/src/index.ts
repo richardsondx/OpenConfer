@@ -12,7 +12,7 @@ const apiToken = process.env.OPENCONFER_API_TOKEN ?? "";
 const client = new OpenConferClient({ baseUrl, apiToken });
 
 const server = new Server(
-  { name: "openconfer", version: "0.2.0" },
+  { name: "openconfer", version: "0.2.1" },
   { capabilities: { tools: {} } },
 );
 

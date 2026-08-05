@@ -138,7 +138,7 @@ describe("SettingsModal Twilio phone channel", () => {
 describe("SettingsModal app version", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("shows the target version and identifies development builds", async () => {
+  it("shows the target version and identifies the current build channel", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -151,12 +151,14 @@ describe("SettingsModal app version", () => {
 
     render(<SettingsModal token="oc_test" open onClose={() => undefined} />);
 
-    const version = __OPENCONFER_BUILD__.version;
+    const { channel, version } = __OPENCONFER_BUILD__;
+    const channelLabel = channel === "release" ? "" : ", development build";
+    const versionSuffix = channel === "release" ? "" : "dev";
     expect(
       await screen.findByLabelText(
-        new RegExp(`OpenConfer version ${version.replaceAll(".", "\\.")}, development build`, "i"),
+        new RegExp(`OpenConfer version ${version.replaceAll(".", "\\.")}${channelLabel}`, "i"),
       ),
-    ).toHaveTextContent(`v${version}dev`);
+    ).toHaveTextContent(`v${version}${versionSuffix}`);
   });
 });
 

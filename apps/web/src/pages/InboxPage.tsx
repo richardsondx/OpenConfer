@@ -1,0 +1,653 @@
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { OperatorInboxShell } from "../components/layouts";
+import { Badge, Button } from "../components/primitives";
+import { SettingsModal } from "../components/SettingsModal";
+import { GetStarted } from "../components/GetStarted";
+import { IncomingCallBanner } from "../components/IncomingCallBanner";
+import type { ApiSession } from "../lib/types";
+import { isDemoSession, isTerminalStatus } from "../lib/types";
+import { sessionOutcome } from "../lib/session-outcome";
+import { DEFAULT_ALERT_PREFS, normalizeAlertPrefs } from "../lib/alert-prefs";
+import { shouldRingSession, startIncomingRing, type RingHandle } from "../lib/incoming-ring";
+import {
+  cancelSession,
+  createDemoSession,
+  declineSession,
+  fetchSettings,
+  joinPathFromUrl,
+  readAgentConnected,
+  snoozeSession,
+  writeAgentConnected,
+  type SettingsView,
+  type DemoUseCase,
+} from "../lib/settings";
+import { TestCallPicker } from "../components/TestCallPicker";
+import { LandingHero } from "../components/LandingHero";
+
+type SettingsSection = "connect" | "access" | "alerts" | "preferences" | "voice" | "status" | "advanced";
+
+type InstallMethod = "npm" | "source";
+
+const installCommands: Record<InstallMethod, { command: string; hint: string }> = {
+  npm: {
+    command: "npm install --global @openconfer/cli",
+    hint: "For published releases.",
+  },
+  source: {
+    command: "pnpm setup",
+    hint: "Recommended from a source checkout.",
+  },
+};
+
+function CopyCommand({ command, label }: { command: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_600);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="quickstart-command">
+      <code>
+        <span aria-hidden="true">$</span> {command}
+      </code>
+      <button type="button" onClick={() => void copy()} aria-label={`Copy ${label}`}>
+        {copied ? (
+          <span className="quickstart-copy-label">Copied</span>
+        ) : (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="8" y="8" width="11" height="11" rx="2" />
+            <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+          </svg>
+        )}
+      </button>
+    </div>
+  );
+}
+
+function OperatorQuickstart({
+  tokenInput,
+  onTokenChange,
+  onSubmit,
+  error,
+}: {
+  tokenInput: string;
+  onTokenChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  error: string | null;
+}) {
+  const [installMethod, setInstallMethod] = useState<InstallMethod>("source");
+  const install = installCommands[installMethod];
+
+  return (
+    <form id="get-started" className="inbox-auth" onSubmit={onSubmit}>
+      <div className="inbox-auth-heading">
+        <span className="inbox-auth-kicker">CLI QUICKSTART</span>
+        <h2>Open your operator inbox</h2>
+        <p>Install OpenConfer, start it locally, then unlock this inbox with the key printed in your terminal.</p>
+      </div>
+
+      <ol className="quickstart-steps">
+        <li className="quickstart-step">
+          <div className="quickstart-step-number" aria-hidden="true">01</div>
+          <div className="quickstart-step-body">
+            <div className="quickstart-step-title">
+              <strong>Install the CLI</strong>
+              <span>{install.hint}</span>
+            </div>
+            <div className="quickstart-terminal">
+              <div className="quickstart-tabs" role="tablist" aria-label="CLI install method">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={installMethod === "source"}
+                  onClick={() => setInstallMethod("source")}
+                >
+                  From source
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={installMethod === "npm"}
+                  onClick={() => setInstallMethod("npm")}
+                >
+                  npm
+                </button>
+              </div>
+              <CopyCommand command={install.command} label={`${installMethod} install command`} />
+            </div>
+          </div>
+        </li>
+
+        <li className="quickstart-step">
+          <div className="quickstart-step-number" aria-hidden="true">02</div>
+          <div className="quickstart-step-body">
+            <div className="quickstart-step-title">
+              <strong>Initialize and launch</strong>
+              <span>Use two terminal windows.</span>
+            </div>
+            <div className="quickstart-launch-grid">
+              <div>
+                <span className="quickstart-terminal-label">Terminal 1 · server</span>
+                <CopyCommand command="openconfer init && openconfer serve" label="server command" />
+              </div>
+              <div>
+                <span className="quickstart-terminal-label">Terminal 2 · inbox</span>
+                <CopyCommand command="openconfer web" label="web app command" />
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li className="quickstart-step quickstart-step-access">
+          <div className="quickstart-step-number" aria-hidden="true">03</div>
+          <div className="quickstart-step-body">
+            <div className="quickstart-step-title">
+              <strong>Paste your access key</strong>
+              <span>Missed it? Run <code className="inline-code">openconfer token</code>.</span>
+            </div>
+            <label className="field-label" htmlFor="operator-token">
+              Access key
+            </label>
+            <div className="inbox-auth-row">
+              <input
+                id="operator-token"
+                className="field-input"
+                type="password"
+                autoComplete="off"
+                value={tokenInput}
+                onChange={(event) => onTokenChange(event.target.value)}
+                placeholder="oc_…"
+                required
+              />
+              <Button type="submit">Open inbox <span aria-hidden="true">→</span></Button>
+            </div>
+            {error && (
+              <p className="field-error" role="alert">
+                {error}
+              </p>
+            )}
+          </div>
+        </li>
+      </ol>
+    </form>
+  );
+}
+
+export function InboxPage() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [sessions, setSessions] = useState<ApiSession[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [token, setToken] = useState(
+    () => sessionStorage.getItem("oc_token") ?? localStorage.getItem("oc_token") ?? "",
+  );
+  const [tokenInput, setTokenInput] = useState("");
+  const [needsToken, setNeedsToken] = useState(!token);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("status");
+  const [settings, setSettings] = useState<SettingsView | null>(null);
+  const [agentConnected, setAgentConnected] = useState(() => readAgentConnected());
+  const [testCallBusy, setTestCallBusy] = useState(false);
+  const [endingId, setEndingId] = useState<string | null>(null);
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
+  const [endingOpen, setEndingOpen] = useState(false);
+  const [ringingSessionId, setRingingSessionId] = useState<string | null>(null);
+  const [callBusy, setCallBusy] = useState(false);
+  const ringHandleRef = useRef<RingHandle | null>(null);
+  const rungKeysRef = useRef(new Set<string>());
+
+  const alertPrefs = useMemo(
+    () => normalizeAlertPrefs(settings?.operator?.alerts ?? DEFAULT_ALERT_PREFS),
+    [settings?.operator?.alerts],
+  );
+
+  const stopRing = useCallback(() => {
+    ringHandleRef.current?.stop();
+    ringHandleRef.current = null;
+    setRingingSessionId(null);
+  }, []);
+
+  const loadSessions = useCallback((opts?: { quiet?: boolean }) => {
+    if (!token) {
+      setLoading(false);
+      setNeedsToken(true);
+      return;
+    }
+    if (!opts?.quiet) setLoading(true);
+    fetch("/v1/sessions", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => {
+        if (r.status === 401) {
+          setNeedsToken(true);
+          throw new Error("That access key was not accepted. Paste the key from openconfer init / openconfer token.");
+        }
+        if (!r.ok) throw new Error("Could not reach the OpenConfer server. Is openconfer serve running?");
+        return r.json();
+      })
+      .then((data) => {
+        setSessions(data.sessions ?? []);
+        setNeedsToken(false);
+        setError(null);
+      })
+      .catch((e: Error) => {
+        if (!opts?.quiet) setError(e.message);
+      })
+      .finally(() => {
+        if (!opts?.quiet) setLoading(false);
+      });
+  }, [token]);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
+
+  // Poll for new Waiting sessions while authenticated.
+  useEffect(() => {
+    if (!token || needsToken) return;
+    const id = window.setInterval(() => loadSessions({ quiet: true }), 8_000);
+    return () => window.clearInterval(id);
+  }, [token, needsToken, loadSessions]);
+
+  // Start ring when a Waiting session appears. Ignoring it (= ring ends) dismisses the banner;
+  // the session stays in the list until Answer / Snooze / Decline.
+  useEffect(() => {
+    const candidate = sessions.find((s) => shouldRingSession(s));
+    if (!candidate) {
+      if (ringingSessionId) stopRing();
+      return;
+    }
+    const ringKey = `${candidate.id}:${candidate.updated_at ?? candidate.created_at ?? ""}`;
+    if (rungKeysRef.current.has(ringKey)) {
+      return;
+    }
+    rungKeysRef.current.add(ringKey);
+    ringHandleRef.current?.stop();
+    ringHandleRef.current = startIncomingRing({
+      reason: candidate.brief?.reason ?? candidate.objective,
+      urgency: candidate.urgency,
+      prefs: alertPrefs,
+      onComplete: () => {
+        ringHandleRef.current = null;
+        setRingingSessionId(null);
+      },
+    });
+    setRingingSessionId(candidate.id);
+  }, [sessions, alertPrefs, ringingSessionId, stopRing]);
+
+  useEffect(() => () => {
+    ringHandleRef.current?.stop();
+  }, []);
+
+  useEffect(() => {
+    if (!token || needsToken) {
+      setSettings(null);
+      return;
+    }
+    fetchSettings(token)
+      .then(setSettings)
+      .catch(() => setSettings(null));
+  }, [token, needsToken]);
+
+  useEffect(() => {
+    if (needsToken || !token) return;
+    if (searchParams.get("connect") !== "1") return;
+    setSettingsSection("connect");
+    setSettingsOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("connect");
+    setSearchParams(next, { replace: true });
+  }, [needsToken, token, searchParams, setSearchParams]);
+
+  const submitToken = (event: FormEvent) => {
+    event.preventDefault();
+    const next = tokenInput.trim();
+    if (!next) return;
+    sessionStorage.setItem("oc_token", next);
+    localStorage.removeItem("oc_token");
+    setError(null);
+    setToken(next);
+  };
+
+  const signOut = () => {
+    sessionStorage.removeItem("oc_token");
+    localStorage.removeItem("oc_token");
+    setToken("");
+    setTokenInput("");
+    setNeedsToken(true);
+    setSessions([]);
+    setSettings(null);
+    setSettingsOpen(false);
+  };
+
+  const openSettings = (section: SettingsSection = "status") => {
+    setSettingsSection(section);
+    setSettingsOpen(true);
+  };
+
+  const markAgentConnected = () => {
+    writeAgentConnected(true);
+    setAgentConnected(true);
+    setSettingsOpen(false);
+  };
+
+  const voiceReady = settings?.status.voice_ready === true;
+  const openSessions = sessions.filter((session) => !isTerminalStatus(session.status));
+
+  const endSession = async (sessionId: string) => {
+    if (!token) return;
+    setEndingId(sessionId);
+    setError(null);
+    try {
+      await cancelSession(token, sessionId);
+      await loadSessions();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not end this session.");
+    } finally {
+      setEndingId(null);
+    }
+  };
+
+  const copyJoinLink = async (session: ApiSession) => {
+    if (!session.join_url) return;
+    setError(null);
+    try {
+      await navigator.clipboard.writeText(session.join_url);
+      setCopiedLinkId(session.id);
+      window.setTimeout(() => {
+        setCopiedLinkId((current) => (current === session.id ? null : current));
+      }, 1_600);
+    } catch {
+      setCopiedLinkId(null);
+      setError("Could not copy the secure link. Open the session and copy it from your address bar.");
+    }
+  };
+
+  const endOpenSessions = async () => {
+    if (!token || openSessions.length === 0) return;
+    setEndingOpen(true);
+    setError(null);
+    const failures: string[] = [];
+    for (const session of openSessions) {
+      try {
+        await cancelSession(token, session.id);
+      } catch {
+        failures.push(session.id.slice(0, 12));
+      }
+    }
+    await loadSessions();
+    if (failures.length > 0) {
+      setError(`Could not end ${failures.length} session${failures.length === 1 ? "" : "s"}.`);
+    }
+    setEndingOpen(false);
+  };
+
+  const startTestCall = async (useCase: DemoUseCase = "decision") => {
+    if (!token) return;
+    if (!voiceReady) {
+      openSettings("voice");
+      return;
+    }
+    setTestCallBusy(true);
+    setError(null);
+    try {
+      const session = await createDemoSession(token, useCase);
+      loadSessions();
+      setSettingsOpen(false);
+      if (session.join_url) {
+        navigate(joinPathFromUrl(session.join_url));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start the sandbox test call.");
+    } finally {
+      setTestCallBusy(false);
+    }
+  };
+
+  const onlyDemoSessions =
+    sessions.length > 0 && sessions.every((session) => isDemoSession(session));
+  const showConnectNextStep = onlyDemoSessions && !agentConnected;
+  const ringingSession = sessions.find((s) => s.id === ringingSessionId && shouldRingSession(s));
+
+  const answerRinging = () => {
+    if (!ringingSession?.join_url) return;
+    stopRing();
+    navigate(joinPathFromUrl(ringingSession.join_url, { autoJoin: true }));
+  };
+
+  const snoozeRinging = async () => {
+    if (!token || !ringingSession) return;
+    setCallBusy(true);
+    setError(null);
+    try {
+      stopRing();
+      await snoozeSession({ token }, ringingSession.id, alertPrefs.snooze_minutes);
+      await loadSessions({ quiet: true });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not snooze this call.");
+    } finally {
+      setCallBusy(false);
+    }
+  };
+
+  const declineRinging = async () => {
+    if (!token || !ringingSession) return;
+    if (!window.confirm("Decline this decision request? The agent will not get an answer.")) return;
+    setCallBusy(true);
+    setError(null);
+    try {
+      stopRing();
+      await declineSession({ token }, ringingSession.id, "declined from inbox");
+      await loadSessions({ quiet: true });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not decline this session.");
+    } finally {
+      setCallBusy(false);
+    }
+  };
+
+  return (
+    <OperatorInboxShell
+      actions={
+        !needsToken && token ? (
+          <>
+            {sessions.length > 0 && (
+              <TestCallPicker
+                id="inbox-test-call-use-case"
+                busy={testCallBusy}
+                voiceReady={voiceReady}
+                buttonVariant="secondary"
+                buttonLabel="Test call"
+                onStartTestCall={(useCase) => void startTestCall(useCase)}
+              />
+            )}
+            <Button type="button" variant="secondary" onClick={() => openSettings("status")}>
+              Settings
+            </Button>
+            <Button type="button" variant="ghost" onClick={signOut}>
+              Sign out
+            </Button>
+          </>
+        ) : undefined
+      }
+    >
+      {needsToken && <LandingHero />}
+
+      {loading && <div className="skeleton" style={{ height: 80 }} />}
+
+      {needsToken && !loading && (
+        <OperatorQuickstart
+          tokenInput={tokenInput}
+          onTokenChange={setTokenInput}
+          onSubmit={submitToken}
+          error={error}
+        />
+      )}
+
+      {error && !needsToken && (
+        <div className="alert alert-warning" role="alert">
+          {error}
+        </div>
+      )}
+
+      {!needsToken && ringingSession && (
+        <IncomingCallBanner
+          session={ringingSession}
+          snoozeMinutes={alertPrefs.snooze_minutes}
+          busy={callBusy}
+          onAnswer={answerRinging}
+          onSnooze={() => void snoozeRinging()}
+          onDecline={() => void declineRinging()}
+        />
+      )}
+
+      {!loading && !needsToken && sessions.length === 0 && !error && (
+        <GetStarted
+          token={token}
+          settings={settings}
+          onOpenSettings={openSettings}
+          onSessionCreated={loadSessions}
+        />
+      )}
+
+      {!needsToken && showConnectNextStep && (
+        <div className="inbox-next-step">
+          <div>
+            <h2>Next: Connect an agent</h2>
+            <p>
+              Your sandbox test call worked. Wire Hermes or OpenClaw when you want real work to pause
+              for your answer.
+            </p>
+          </div>
+          <div className="inbox-next-step-actions">
+            <Button type="button" onClick={() => openSettings("connect")}>
+              Connect Agent
+            </Button>
+            <Button type="button" variant="ghost" onClick={markAgentConnected}>
+              I connected the agent
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {!needsToken && sessions.length > 0 && (
+        <ul className="session-list">
+          {sessions.map((s) => {
+            const open = !isTerminalStatus(s.status);
+            const ending = endingId === s.id;
+            const outcome = sessionOutcome(s);
+            const metaParts = [
+              isDemoSession(s) ? "sandbox" : null,
+              outcome.shapeCue,
+              `${s.initiator.agent_id} · ${s.initiator.harness}`,
+              s.join_url ? null : "No join link",
+            ].filter(Boolean);
+            const body = (
+              <>
+                <div className="session-row-objective">{s.objective}</div>
+                {outcome.detail && <div className="session-row-outcome">{outcome.detail}</div>}
+                <div className="session-row-meta">{metaParts.join(" · ")}</div>
+              </>
+            );
+            const isRinging = ringingSession?.id === s.id;
+            const snoozedUntil = s.status === "snoozed" && s.snooze_until
+              ? `Until ${new Date(s.snooze_until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+              : null;
+            return (
+              <li
+                key={s.id}
+                className={`session-row session-row--${outcome.tone}${isRinging ? " is-ringing" : ""}`}
+              >
+                {s.join_url ? (
+                  <Link
+                    to={joinPathFromUrl(s.join_url, { autoJoin: open })}
+                    className="session-row-link"
+                  >
+                    {body}
+                    {snoozedUntil && <div className="session-row-meta">{snoozedUntil}</div>}
+                  </Link>
+                ) : (
+                  <div className="session-row-link">
+                    {body}
+                    {snoozedUntil && <div className="session-row-meta">{snoozedUntil}</div>}
+                  </div>
+                )}
+                <div className="session-row-aside">
+                  <Badge variant={outcome.variant} live={outcome.label === "In progress"}>
+                    {outcome.label}
+                  </Badge>
+                  {s.join_url && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void copyJoinLink(s)}
+                      aria-label={`Copy secure link for ${s.objective}`}
+                    >
+                      {copiedLinkId === s.id ? "Copied ✓" : "Copy link"}
+                    </Button>
+                  )}
+                  {open && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={ending || endingOpen}
+                      onClick={() => void endSession(s.id)}
+                      aria-label={`End session ${s.id}`}
+                    >
+                      {ending ? "Ending…" : "End"}
+                    </Button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {!needsToken && sessions.length > 0 && (
+        <div className="inbox-footer-actions">
+          {openSessions.length > 0 && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={endingOpen || endingId !== null}
+              onClick={() => void endOpenSessions()}
+            >
+              {endingOpen
+                ? "Ending open sessions…"
+                : `End ${openSessions.length} open session${openSessions.length === 1 ? "" : "s"}`}
+            </Button>
+          )}
+          <Button type="button" variant="ghost" onClick={() => loadSessions()}>
+            Refresh
+          </Button>
+        </div>
+      )}
+
+      {token && (
+        <SettingsModal
+          token={token}
+          open={settingsOpen}
+          initialSection={settingsSection}
+          onClose={() => setSettingsOpen(false)}
+          onAgentConnected={markAgentConnected}
+          onStartTestCall={(useCase) => void startTestCall(useCase)}
+          testCallBusy={testCallBusy}
+          onTokenRotated={(next) => {
+            sessionStorage.setItem("oc_token", next);
+            setToken(next);
+          }}
+        />
+      )}
+    </OperatorInboxShell>
+  );
+}

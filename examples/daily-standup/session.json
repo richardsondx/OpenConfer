@@ -1,0 +1,22 @@
+{
+  "type": "briefing",
+  "initiator": { "agent_id": "hermes-primary", "harness": "hermes", "project": "openconfer" },
+  "participant": { "operator_id": "me" },
+  "objective": "Confirm today's priorities",
+  "brief": {
+    "reason": "Daily standup briefing",
+    "completed": ["Shipped session API", "Built browser client"],
+    "recommendation": "Focus on webhook reliability today"
+  },
+  "result_schema": {
+    "type": "object",
+    "required": ["decisions", "next_actions"],
+    "properties": {
+      "decisions": { "type": "array" },
+      "next_actions": { "type": "array" }
+    }
+  },
+  "routing": { "policy": "default" },
+  "urgency": "normal",
+  "estimated_duration_minutes": 5
+}

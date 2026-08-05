@@ -1,0 +1,22 @@
+{
+  "name": "@openconfer/openclaw",
+  "version": "0.2.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "files": [
+    "index.js",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "openclaw": {
+    "extensions": ["./index.js"]
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}

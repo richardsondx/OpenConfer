@@ -1,0 +1,56 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images
+        run: |
+          docker build --target server -t openconfer-server:test -f docker/Dockerfile.server .
+          docker build --target conversation-worker -t openconfer-worker:test -f docker/Dockerfile.server .
+          docker build -t openconfer-web:test -f docker/Dockerfile.web .
+      - name: Smoke test server
+        run: |
+          docker run -d --name openconfer-smoke -p 8787:8787 \
+            -e OPENCONFER_API_TOKEN=oc_ci_smoke_token \
+            -e OPENCONFER_PUBLIC_URL=http://localhost:5173 \
+            openconfer-server:test
+          for attempt in $(seq 1 20); do
+            curl --fail --silent http://localhost:8787/health && break
+            if [ "$attempt" -eq 20 ]; then
+              docker logs openconfer-smoke
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent \
+            -H 'Authorization: Bearer oc_ci_smoke_token' \
+            http://localhost:8787/v1/sessions
+      - name: Smoke test credential-gated worker
+        run: |
+          docker run -d --name openconfer-worker-smoke openconfer-worker:test
+          sleep 3
+          docker inspect --format '{{.State.Running}}' openconfer-worker-smoke | grep true
+          docker logs openconfer-worker-smoke | grep 'voice agent disabled'

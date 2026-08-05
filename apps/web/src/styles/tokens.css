@@ -1,0 +1,115 @@
+:root {
+  /* Surfaces */
+  --oc-surface: #f7f4ef;
+  --oc-surface-raised: #ffffff;
+  --oc-surface-muted: #ede8e0;
+  --oc-surface-inverse: #141816;
+
+  /* Text */
+  --oc-text: #1a1f1c;
+  --oc-text-muted: #5c6560;
+  --oc-text-quiet: #68726c;
+  --oc-text-inverse: #f7f4ef;
+
+  /* Accent — deep teal */
+  --oc-accent: #1a4d4a;
+  --oc-accent-hover: #143d3b;
+  --oc-accent-muted: #d4e8e6;
+  --oc-accent-text: #ffffff;
+
+  /* Semantic */
+  --oc-danger: #9b3b30;
+  --oc-danger-muted: #f5e5e3;
+  --oc-success: #2d6a4f;
+  --oc-success-muted: #d8f0e4;
+  --oc-warning: #8a6d1a;
+  --oc-warning-muted: #f5eed4;
+
+  /* Spacing — 4px scale */
+  --oc-space-1: 4px;
+  --oc-space-2: 8px;
+  --oc-space-3: 12px;
+  --oc-space-4: 16px;
+  --oc-space-5: 20px;
+  --oc-space-6: 24px;
+  --oc-space-8: 32px;
+  --oc-space-10: 40px;
+  --oc-space-12: 48px;
+
+  /* Type */
+  --oc-font-sans: "DM Sans", system-ui, sans-serif;
+  --oc-font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --oc-text-xs: 0.75rem;
+  --oc-text-sm: 0.875rem;
+  --oc-text-base: 1rem;
+  --oc-text-lg: 1.125rem;
+  --oc-text-xl: 1.375rem;
+  --oc-text-2xl: 1.75rem;
+  --oc-text-3xl: 2.25rem;
+
+  /* Radius */
+  --oc-radius-sm: 6px;
+  --oc-radius-md: 10px;
+  --oc-radius-lg: 16px;
+
+  /* Motion */
+  --oc-duration-fast: 120ms;
+  --oc-duration-normal: 220ms;
+  --oc-duration-slow: 400ms;
+  --oc-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+
+  /* Focus */
+  --oc-focus-ring: 0 0 0 3px var(--oc-accent-muted);
+
+  /* Layout */
+  --oc-max-width: 720px;
+  --oc-max-width-wide: 1180px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  font-family: var(--oc-font-sans);
+  font-size: var(--oc-text-base);
+  line-height: 1.5;
+  color: var(--oc-text);
+  background: var(--oc-surface);
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--oc-focus-ring);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: var(--oc-accent);
+}

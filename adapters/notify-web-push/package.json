@@ -1,0 +1,10 @@
+{
+  "name": "@openconfer/notify-web-push",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": { "build": "tsc -p tsconfig.json" },
+  "dependencies": { "@openconfer/adapter-sdk": "workspace:*" },
+  "devDependencies": { "typescript": "^5.8.3" }
+}

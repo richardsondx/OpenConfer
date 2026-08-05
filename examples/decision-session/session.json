@@ -1,0 +1,49 @@
+{
+  "type": "decision",
+  "initiator": {
+    "agent_id": "hermes-primary",
+    "harness": "hermes",
+    "project": "openconfer"
+  },
+  "participant": {
+    "operator_id": "me"
+  },
+  "objective": "Choose the default transport for the MVP",
+  "brief": {
+    "reason": "Implementation is blocked by a product decision",
+    "completed": [
+      "Defined the session lifecycle",
+      "Evaluated browser and telephone transports"
+    ],
+    "recommendation": "Use browser WebRTC first",
+    "options": [
+      { "id": "browser", "label": "Browser-first" },
+      { "id": "phone", "label": "Telephone-first" }
+    ]
+  },
+  "result_schema": {
+    "type": "object",
+    "required": ["selected_option", "constraints"],
+    "properties": {
+      "selected_option": {
+        "type": "string",
+        "enum": ["browser", "phone", "defer"]
+      },
+      "constraints": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  },
+  "routing": { "policy": "default" },
+  "continuation": {
+    "run_id": "run_demo_001",
+    "opaque_token": "demo-token"
+  },
+  "callback": {
+    "url": "http://localhost:9090/openconfer/events",
+    "secret": "demo-webhook-secret-change-me"
+  },
+  "urgency": "normal",
+  "estimated_duration_minutes": 3
+}

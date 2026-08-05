@@ -1,0 +1,14 @@
+node_modules
+.cursor
+dist
+.turbo
+*.db
+*.db-journal
+.env
+.env.local
+.DS_Store
+coverage
+*.log
+.openconfer
+*.tsbuildinfo
+.playwright-cli

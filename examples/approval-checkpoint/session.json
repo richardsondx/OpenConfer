@@ -1,0 +1,22 @@
+{
+  "type": "approval",
+  "initiator": { "agent_id": "hermes-primary", "harness": "hermes", "project": "production" },
+  "participant": { "operator_id": "me" },
+  "objective": "Approve publishing release v0.1.0 to production",
+  "brief": {
+    "reason": "Release candidate passed all checks",
+    "recommendation": "Approve deploy",
+    "context": "Changelog: initial MVP, browser sessions, webhook delivery"
+  },
+  "result_schema": {
+    "type": "object",
+    "required": ["approved"],
+    "properties": {
+      "approved": { "type": "boolean" },
+      "notes": { "type": "string" }
+    }
+  },
+  "routing": { "policy": "default" },
+  "urgency": "high",
+  "estimated_duration_minutes": 2
+}

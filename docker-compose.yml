@@ -1,0 +1,60 @@
+services:
+  openconfer-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+      target: server
+    ports:
+      - "${OPENCONFER_API_PORT:-8787}:8787"
+    volumes:
+      - openconfer-data:/root/.openconfer
+    environment:
+      OPENCONFER_JWT_SECRET: ${OPENCONFER_JWT_SECRET:-}
+      OPENCONFER_API_TOKEN: ${OPENCONFER_API_TOKEN:-}
+      OPENCONFER_PUBLIC_URL: ${OPENCONFER_PUBLIC_URL:-http://localhost:5173}
+      LIVEKIT_URL: ${LIVEKIT_URL:-ws://livekit:7880}
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
+      OPENCONFER_VOICE_AGENT_NAME: ${OPENCONFER_VOICE_AGENT_NAME:-openconfer-conversation}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8787/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  openconfer-web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    ports:
+      - "${OPENCONFER_WEB_PORT:-5173}:80"
+    depends_on:
+      - openconfer-server
+
+  conversation-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+      target: conversation-worker
+    environment:
+      LIVEKIT_URL: ${LIVEKIT_URL:-ws://livekit:7880}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENCONFER_VOICE_AGENT_NAME: ${OPENCONFER_VOICE_AGENT_NAME:-openconfer-conversation}
+    depends_on:
+      livekit:
+        condition: service_started
+
+  livekit:
+    image: livekit/livekit-server:v1.9.7
+    command: --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+    ports:
+      # LiveKit advertises these RTC ports to browsers, so host and container
+      # ports must match in the reference local deployment.
+      - "7880:7880"
+      - "7881:7881"
+
+volumes:
+  openconfer-data:

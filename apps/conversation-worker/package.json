@@ -1,0 +1,42 @@
+{
+  "name": "@openconfer/conversation-worker",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js start"
+  },
+  "dependencies": {
+    "@livekit/agents": "1.6.1",
+    "@livekit/agents-plugin-cartesia": "1.6.1",
+    "@livekit/agents-plugin-deepgram": "1.6.1",
+    "@livekit/agents-plugin-elevenlabs": "1.6.1",
+    "@livekit/agents-plugin-openai": "1.6.1",
+    "@livekit/rtc-node": "0.13.33",
+    "@openconfer/conversation-livekit": "workspace:*",
+    "@openconfer/core": "workspace:*",
+    "@openconfer/schemas": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

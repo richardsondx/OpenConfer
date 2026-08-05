@@ -1,0 +1,35 @@
+{
+  "id": "openconfer",
+  "name": "OpenConfer",
+  "description": "Requests structured human decision sessions and routes signed results",
+  "version": "0.2.0",
+  "contracts": {
+    "tools": ["request_human_session", "wait_human_session", "acknowledge_human_session"]
+  },
+  "activation": {
+    "onStartup": false,
+    "onCapabilities": ["tool"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": { "type": "string", "default": "http://localhost:8787" },
+      "apiToken": { "type": "string" },
+      "agentId": { "type": "string", "default": "openclaw" },
+      "operatorId": { "type": "string", "default": "me" },
+      "project": { "type": "string" },
+      "webhookSecret": { "type": "string" },
+      "callbackUrl": { "type": "string" },
+      "webhookPort": { "type": "number" }
+    },
+    "required": ["apiToken"]
+  },
+  "uiHints": {
+    "apiToken": { "label": "OpenConfer API token", "sensitive": true },
+    "webhookSecret": { "label": "Webhook signing secret", "sensitive": true },
+    "baseUrl": { "label": "OpenConfer base URL" },
+    "callbackUrl": { "label": "OpenClaw webhook callback URL" },
+    "webhookPort": { "label": "Local webhook receiver port" }
+  }
+}

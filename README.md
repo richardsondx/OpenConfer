@@ -87,7 +87,7 @@ and accepts a pinned version:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/openconfer/openconfer/main/scripts/install.sh | \
-  OPENCONFER_VERSION=0.1.0 bash
+  OPENCONFER_VERSION=0.2.0 bash
 ```
 
 The installer fails if the requested package/version cannot be installed. Use

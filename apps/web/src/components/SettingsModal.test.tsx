@@ -151,9 +151,12 @@ describe("SettingsModal app version", () => {
 
     render(<SettingsModal token="oc_test" open onClose={() => undefined} />);
 
-    expect(await screen.findByLabelText(/OpenConfer version 0\.1\.0, development build/i)).toHaveTextContent(
-      "v0.1.0dev",
-    );
+    const version = __OPENCONFER_BUILD__.version;
+    expect(
+      await screen.findByLabelText(
+        new RegExp(`OpenConfer version ${version.replaceAll(".", "\\.")}, development build`, "i"),
+      ),
+    ).toHaveTextContent(`v${version}dev`);
   });
 });
 

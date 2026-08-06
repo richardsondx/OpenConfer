@@ -221,6 +221,8 @@ openconfer session create --stdin --json <<JSON
 JSON
 \`\`\`
 
+When source context is available, add an optional continuity object with the agent personality, explicit relationship state, and current thread summary. Set continuity.agent.id to the same value as initiator.agent_id. Never put memory provider API keys, tokens, or credentials in this object.
+
 ## Deterministic lifecycle
 
 Keep the returned ID in agent task state, not a file. Wait and read only after a

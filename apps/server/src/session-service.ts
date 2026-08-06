@@ -2,6 +2,9 @@ import { createHash, randomBytes } from "node:crypto";
 import type {
   CapturedContext,
   ConferSession,
+  ContinuityCapsule,
+  ContinuityPackage,
+  ContinuityTrace,
   PendingDecision,
   PhoneRetryPolicy,
   PhoneRetrySnapshot,
@@ -73,6 +76,47 @@ const RETRY_WINDOW_MS: Record<PhoneRetryPolicy, number> = {
   brief: 10 * 60_000,
   persistent: 30 * 60_000,
 };
+
+function continuityTraceFor(continuity?: ContinuityPackage): ContinuityTrace {
+  return continuity
+    ? {
+        applied: ["personality", "relationship", "thread"],
+        memory: "not_attempted",
+        degraded: false,
+      }
+    : {
+        applied: ["fallback"],
+        memory: "not_attempted",
+        degraded: true,
+      };
+}
+
+function continuityCapsuleFor(
+  session: ConferSession,
+  result: Record<string, unknown>,
+  summary: string | undefined,
+  capturedContext: CapturedContext,
+): ContinuityCapsule {
+  return {
+    continuityVersion: "1.0",
+    summary: summary ?? "",
+    decisions: result,
+    openThreads: capturedContext.unresolved_topics,
+    suggestedMemoryUpdates: [],
+    contextSources: (session.continuityTrace ?? continuityTraceFor(session.continuity)).applied,
+  };
+}
+
+function serializeContinuityCapsule(capsule: ContinuityCapsule) {
+  return {
+    continuity_version: capsule.continuityVersion,
+    summary: capsule.summary,
+    decisions: capsule.decisions,
+    open_threads: capsule.openThreads,
+    suggested_memory_updates: capsule.suggestedMemoryUpdates,
+    context_sources: capsule.contextSources,
+  };
+}
 
 export function fingerprintCreateInput(input: CreateSessionInput): string {
   const { idempotency_key: _ignored, ...payload } = input;
@@ -218,6 +262,8 @@ export class SessionService {
         },
         resultSchema: input.result_schema,
         routing: input.routing,
+        continuity: input.continuity,
+        continuityTrace: continuityTraceFor(input.continuity),
         continuation: input.continuation
           ? { runId: input.continuation.run_id, opaqueToken: input.continuation.opaque_token }
           : undefined,
@@ -269,6 +315,8 @@ export class SessionService {
         },
         resultSchema: input.result_schema,
         routing: input.routing,
+        continuity: input.continuity,
+        continuityTrace: continuityTraceFor(input.continuity),
         createdAt: now,
         updatedAt: now,
       };
@@ -325,6 +373,8 @@ export class SessionService {
       },
       resultSchema: input.result_schema,
       routing: input.routing,
+      continuity: input.continuity,
+      continuityTrace: continuityTraceFor(input.continuity),
       continuation: input.continuation
         ? { runId: input.continuation.run_id, opaqueToken: input.continuation.opaque_token }
         : undefined,
@@ -347,6 +397,12 @@ export class SessionService {
     if (!inserted.inserted) {
       return this.resolveExisting(inserted.session, fingerprint, input.idempotency_key);
     }
+
+    this.store.addEvent(id, "session.continuity_initialized", {
+      applied: session.continuityTrace?.applied ?? ["fallback"],
+      memory: session.continuityTrace?.memory ?? "not_attempted",
+      degraded: session.continuityTrace?.degraded ?? true,
+    });
 
     return this.resumeCreate(inserted.session);
   }
@@ -683,6 +739,12 @@ export class SessionService {
         result,
         summary,
         capturedContext: normalizedCapturedContext,
+        continuityCapsule: continuityCapsuleFor(
+          session,
+          result,
+          summary,
+          normalizedCapturedContext,
+        ),
         humanConfirmation: { confirmedAt, method, submissionId: resolvedSubmissionId },
       },
       webhook,
@@ -1021,6 +1083,12 @@ export class SessionService {
     confirmedAt: string,
     method: "session_ui" | "text_form" | "voice_agent",
   ) {
+    const continuityCapsule = continuityCapsuleFor(
+      session,
+      result,
+      summary,
+      capturedContext,
+    );
     return {
       session_id: session.id,
       status: "completed",
@@ -1028,6 +1096,7 @@ export class SessionService {
       summary: summary ?? "",
       result,
       captured_context: capturedContext,
+      continuity_capsule: serializeContinuityCapsule(continuityCapsule),
       continuation: session.continuation
         ? {
             run_id: session.continuation.runId,

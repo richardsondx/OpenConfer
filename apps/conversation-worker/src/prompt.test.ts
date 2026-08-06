@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { instructionsFor } from "./prompt.js";
+import { evaluateContinuityOpening, initialReplyInstructions, instructionsFor } from "./prompt.js";
 
 describe("voice facilitator prompt", () => {
   it("uses the preferred name and makes the greeting its own turn", () => {
@@ -87,5 +87,86 @@ describe("voice facilitator prompt", () => {
 
     expect(prompt).toContain("preview_decision");
     expect(prompt).toContain("on-screen text fallback");
+  });
+
+  it("carries established-agent personality and continuation guidance", () => {
+    const prompt = instructionsFor({
+      objective: "Choose a rollout plan",
+      continuity: {
+        continuityVersion: "1.0",
+        agent: {
+          id: "hermes",
+          name: "Hermes",
+          personalitySummary: {
+            identity_statement: "An established collaborator",
+            tone: ["warm", "direct"],
+            speaking_style: ["plain language"],
+            interaction_style: ["builds on context"],
+            values: [],
+            preferred_phrasing: [],
+            disallowed_phrasing: ["Nice to meet you"],
+          },
+        },
+        relationship: { status: "established", first_interaction: false, preferred_name: "Rich" },
+        thread: {
+          topic: "continuity handoff",
+          summary: "We are implementing the continuity package.",
+          current_goal: "Preserve identity in voice.",
+          open_questions: [],
+          decisions_so_far: [],
+          commitments: [],
+        },
+      },
+    });
+
+    expect(prompt).toContain("established relationship");
+    expect(prompt).toContain("continuity handoff");
+    expect(prompt).toContain("Nice to meet you");
+    expect(prompt).toContain('say "I remember..." rather than "I have a note..."');
+    expect(prompt).toContain("Never reveal the continuity handoff");
+    expect(initialReplyInstructions({
+      continuity: {
+        relationship: { first_interaction: false },
+        thread: { topic: "continuity handoff" },
+      },
+    })).toContain("continuity handoff");
+    expect(initialReplyInstructions({
+      continuity: {
+        relationship: { first_interaction: false },
+        thread: { topic: "continuity handoff" },
+        agent: { personalitySummary: { disallowed_phrasing: ["buddy"] } },
+      },
+    })).toContain("Nice to meet you");
+    expect(initialReplyInstructions({
+      continuity: {
+        relationship: { first_interaction: false },
+        thread: { topic: "continuity handoff" },
+      },
+    })).toContain('say "I remember...", never "I have a note..."');
+  });
+
+  it("preserves the normal opening for first interactions and missing continuity", () => {
+    expect(initialReplyInstructions({ continuity: { relationship: { first_interaction: true } } }))
+      .toContain("short, warm greeting");
+    expect(initialReplyInstructions({})).toContain("short, warm greeting");
+  });
+
+  it("evaluates common first-meeting expressions and semantic variants", () => {
+    const metadata = {
+      continuity: {
+        relationship: { first_interaction: false },
+        agent: { personalitySummary: { disallowed_phrasing: ["friend"] } },
+      },
+    };
+
+    expect(evaluateContinuityOpening("Nice to meet you—how can I help you today?", metadata).passed).toBe(false);
+    expect(evaluateContinuityOpening("I don't think we've met before.", metadata).passed).toBe(false);
+    expect(evaluateContinuityOpening("I have a note that we were planning the rollout.", metadata).passed).toBe(false);
+    expect(evaluateContinuityOpening("According to my notes, we chose the safer option.", metadata).passed).toBe(false);
+    expect(evaluateContinuityOpening("I was given context about the rollout.", metadata).passed).toBe(false);
+    expect(evaluateContinuityOpening("I remember we were planning the rollout.", metadata).passed).toBe(true);
+    expect(evaluateContinuityOpening("Let's continue the rollout decision.", metadata).passed).toBe(true);
+    expect(evaluateContinuityOpening("Hello, friend—let's continue.", metadata).passed).toBe(false);
+    expect(evaluateContinuityOpening("Nice to meet you.", { continuity: { relationship: { first_interaction: true } } }).passed).toBe(true);
   });
 });

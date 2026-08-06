@@ -21,7 +21,7 @@ import {
   readVoiceSessionTimeouts,
   type VoiceDisconnectReason,
 } from "./idle-policy.js";
-import { instructionsFor, type ConferMetadata } from "./prompt.js";
+import { initialReplyInstructions, instructionsFor, type ConferMetadata } from "./prompt.js";
 import {
   BoundedSaveRetry,
   retryAuthorizationMessage,
@@ -391,11 +391,7 @@ const agent = defineAgent({
       if (event.isFinal && event.transcript.trim()) timeoutGuard.markUserActivity();
     });
     session.once(AgentSessionEventTypes.Close, () => timeoutGuard.stop());
-    await session.generateReply({
-      instructions: metadata.pendingDecision
-        ? `Open in the session locale (${locale}) with a short greeting, say the previous call was interrupted, read back the pending decision packet, and ask whether it is still correct. Do not submit until the operator confirms again on this call.`
-        : `Open the call now in the session locale (${locale}) with only a short, warm greeting. Use the operator's preferred name when provided, then stop and wait for their response. Do not state the objective or options yet.`,
-    });
+    await session.generateReply({ instructions: initialReplyInstructions(metadata) });
   },
 });
 

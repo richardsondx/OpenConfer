@@ -137,6 +137,83 @@ export interface PhoneRetrySnapshot {
   blockedReason?: string;
 }
 
+export interface ContinuityPersonality {
+  identity_statement: string;
+  tone: string[];
+  speaking_style: string[];
+  interaction_style: string[];
+  values: string[];
+  preferred_phrasing: string[];
+  disallowed_phrasing: string[];
+  greeting_policy?: string;
+  uncertainty_style?: string;
+  humor_style?: string;
+  verbosity?: "terse" | "balanced" | "detailed";
+  relationship_behavior?: string;
+}
+
+export interface ContinuityPackage {
+  continuity_version: "1.0";
+  agent: {
+    id: string;
+    name?: string;
+    source?: string;
+    personality_summary: ContinuityPersonality;
+  };
+  relationship: {
+    status: "new" | "established";
+    first_interaction: boolean;
+    preferred_name?: string;
+    summary?: string;
+  };
+  thread: {
+    topic?: string;
+    summary: string;
+    current_goal: string;
+    open_questions: string[];
+    decisions_so_far: string[];
+    commitments: string[];
+    last_user_intent?: string;
+    last_agent_message?: string;
+    handoff_instruction?: string;
+  };
+  /** Non-secret provider reference. Credentials never belong here. */
+  memory?: {
+    provider?: string;
+    connection_id?: string;
+    workspace?: string;
+    user_peer?: string;
+    agent_peer?: string;
+    session_strategy: "per_call" | "per_source_conversation" | "per_workspace" | "per_project" | "global";
+    permissions: Array<
+      | "identity:read"
+      | "relationship:read"
+      | "preferences:read"
+      | "episodes:search"
+      | "thread:read"
+      | "call_summary:write"
+      | "memory_suggestions:write"
+    >;
+  };
+}
+
+export type ContinuityContextSource = "personality" | "relationship" | "thread" | "fallback";
+
+export interface ContinuityTrace {
+  applied: ContinuityContextSource[];
+  memory: "not_attempted" | "unavailable";
+  degraded: boolean;
+}
+
+export interface ContinuityCapsule {
+  continuityVersion: "1.0";
+  summary: string;
+  decisions: Record<string, unknown>;
+  openThreads: string[];
+  suggestedMemoryUpdates: [];
+  contextSources: ContinuityContextSource[];
+}
+
 export interface CapturedContext {
   /** Preferences or constraints that shape the originating work. */
   steering: string[];
@@ -171,6 +248,9 @@ export interface ConferSession {
   routing: { policy: string };
   continuation?: SessionContinuation;
   callback?: SessionCallback;
+  continuity?: ContinuityPackage;
+  continuityTrace?: ContinuityTrace;
+  continuityCapsule?: ContinuityCapsule;
   urgency?: "normal" | "high" | "incident";
   estimatedDurationMinutes?: number;
   expiresAt?: string;

@@ -134,6 +134,11 @@ const plugin = {
             required: ["reason"],
           },
           result_schema: { type: "object", additionalProperties: true },
+          continuity: {
+            type: "object",
+            description: "Optional source-agent identity, relationship, and active-thread context. Never include provider secrets.",
+            additionalProperties: true,
+          },
           type: { type: "string", enum: ["decision", "approval", "briefing", "incident"] },
           urgency: { type: "string", enum: ["normal", "high", "incident"] },
           run_id: { type: "string" },
@@ -150,6 +155,7 @@ const plugin = {
           objective: params.objective,
           brief: params.brief,
           result_schema: params.result_schema,
+          ...(params.continuity ? { continuity: params.continuity } : {}),
           initiator: {
             agent_id: config.agentId ?? "openclaw",
             harness: "openclaw",

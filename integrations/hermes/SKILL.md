@@ -77,6 +77,11 @@ openconfer session create --stdin --json <<JSON
 JSON
 ```
 
+When source context is available, add an optional `continuity` object with the
+agent personality, explicit relationship state, and current thread summary.
+Set `continuity.agent.id` to the same value as `initiator.agent_id`. Never put
+memory provider API keys, tokens, or credentials in this object.
+
 The command returns JSON containing the session `id`. Keep that ID and `run_id`
 in the agent's task state, not in a file. Do not expose or open `join_url`.
 

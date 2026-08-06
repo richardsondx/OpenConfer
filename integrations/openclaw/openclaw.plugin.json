@@ -2,7 +2,7 @@
   "id": "openconfer",
   "name": "OpenConfer",
   "description": "Requests structured human decision sessions and routes signed results",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "contracts": {
     "tools": ["request_human_session", "wait_human_session", "acknowledge_human_session"]
   },

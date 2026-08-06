@@ -95,6 +95,55 @@ describe("LiveKit adapter dispatch", () => {
     expect(room.url).toBe("wss://livekit.example");
   });
 
+  it("passes safe continuity context but never provider memory references to the voice worker", async () => {
+    const adapter = createLiveKitAdapter({
+      url: "wss://livekit.example",
+      apiUrl: "https://livekit.example",
+      apiKey: "key",
+      apiSecret: "secret",
+      agentName: "openconfer-voice",
+      mock: false,
+    });
+    await adapter.createRoom({
+      ...session,
+      continuity: {
+        continuity_version: "1.0",
+        agent: {
+          id: "agent",
+          name: "Hermes",
+          personality_summary: {
+            identity_statement: "An established collaborator",
+            tone: ["direct"],
+            speaking_style: [],
+            interaction_style: [],
+            values: [],
+            preferred_phrasing: [],
+            disallowed_phrasing: ["Nice to meet you"],
+          },
+        },
+        relationship: { status: "established", first_interaction: false },
+        thread: {
+          summary: "Continue the handoff.",
+          current_goal: "Preserve identity.",
+          open_questions: [],
+          decisions_so_far: [],
+          commitments: [],
+        },
+        memory: {
+          provider: "honcho",
+          connection_id: "secret-ref",
+          session_strategy: "per_source_conversation",
+          permissions: ["relationship:read"],
+        },
+      },
+    });
+    const metadata = JSON.parse(createRoom.mock.calls[0]![0].metadata);
+    expect(metadata.continuity.agent.name).toBe("Hermes");
+    expect(metadata.continuity.thread.current_goal).toBe("Preserve identity.");
+    expect(JSON.stringify(metadata)).not.toContain("secret-ref");
+    expect(JSON.stringify(metadata)).not.toContain("honcho");
+  });
+
   it("creates a fresh named room and passes an unconfirmed preview to the voice agent", async () => {
     const adapter = createLiveKitAdapter({
       url: "wss://livekit.example",

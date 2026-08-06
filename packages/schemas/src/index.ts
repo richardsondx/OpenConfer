@@ -45,6 +45,107 @@ export const CallbackSchema = z.object({
   secret: z.string().min(16).optional(),
 });
 
+const ContinuityTextArraySchema = z
+  .array(z.string().trim().min(1).max(500))
+  .max(20)
+  .default([]);
+
+export const ContinuityPersonalitySchema = z
+  .object({
+    identity_statement: z.string().trim().min(1).max(1_000),
+    tone: ContinuityTextArraySchema,
+    speaking_style: ContinuityTextArraySchema,
+    interaction_style: ContinuityTextArraySchema,
+    values: ContinuityTextArraySchema,
+    preferred_phrasing: ContinuityTextArraySchema,
+    disallowed_phrasing: ContinuityTextArraySchema,
+    greeting_policy: z.string().trim().min(1).max(1_000).optional(),
+    uncertainty_style: z.string().trim().min(1).max(1_000).optional(),
+    humor_style: z.string().trim().min(1).max(1_000).optional(),
+    verbosity: z.enum(["terse", "balanced", "detailed"]).optional(),
+    relationship_behavior: z.string().trim().min(1).max(1_000).optional(),
+  })
+  .strict();
+
+export const ContinuityMemorySchema = z
+  .object({
+    provider: z.string().trim().min(1).max(100).optional(),
+    connection_id: z.string().trim().min(1).max(200).optional(),
+    workspace: z.string().trim().min(1).max(200).optional(),
+    user_peer: z.string().trim().min(1).max(200).optional(),
+    agent_peer: z.string().trim().min(1).max(200).optional(),
+    session_strategy: z
+      .enum(["per_call", "per_source_conversation", "per_workspace", "per_project", "global"])
+      .default("per_source_conversation"),
+    permissions: z
+      .array(
+        z.enum([
+          "identity:read",
+          "relationship:read",
+          "preferences:read",
+          "episodes:search",
+          "thread:read",
+          "call_summary:write",
+          "memory_suggestions:write",
+        ]),
+      )
+      .max(20)
+      .default([]),
+  })
+  .strict();
+
+export const ContinuityRelationshipSchema = z
+  .object({
+    status: z.enum(["new", "established"]),
+    first_interaction: z.boolean(),
+    preferred_name: z.string().trim().min(1).max(80).optional(),
+    summary: z.string().trim().min(1).max(2_000).optional(),
+  })
+  .strict();
+
+export const ContinuityThreadSchema = z
+  .object({
+    topic: z.string().trim().min(1).max(500).optional(),
+    summary: z.string().trim().min(1).max(4_000),
+    current_goal: z.string().trim().min(1).max(1_000),
+    open_questions: ContinuityTextArraySchema,
+    decisions_so_far: ContinuityTextArraySchema,
+    commitments: ContinuityTextArraySchema,
+    last_user_intent: z.string().trim().min(1).max(1_000).optional(),
+    last_agent_message: z.string().trim().min(1).max(2_000).optional(),
+    handoff_instruction: z.string().trim().min(1).max(1_000).optional(),
+  })
+  .strict();
+
+export const ContinuitySchema = z
+  .object({
+    continuity_version: z.literal("1.0"),
+    agent: z
+      .object({
+        id: z.string().trim().min(1).max(200),
+        name: z.string().trim().min(1).max(200).optional(),
+        source: z.string().trim().min(1).max(100).optional(),
+        personality_summary: ContinuityPersonalitySchema,
+      })
+      .strict(),
+    relationship: ContinuityRelationshipSchema,
+    thread: ContinuityThreadSchema,
+    memory: ContinuityMemorySchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const expectedFirstInteraction = value.relationship.status === "new";
+    if (value.relationship.first_interaction !== expectedFirstInteraction) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["relationship", "first_interaction"],
+        message: "Must agree with relationship.status",
+      });
+    }
+  });
+
+export type ContinuityPackage = z.infer<typeof ContinuitySchema>;
+
 export const SessionLocaleSchema = z
   .string()
   .trim()
@@ -60,7 +161,8 @@ export const SessionLocaleSchema = z
   }, "Must be a valid BCP 47 locale")
   .transform((value) => Intl.getCanonicalLocales(value)[0]!);
 
-export const CreateSessionSchema = z.object({
+export const CreateSessionSchema = z
+  .object({
   type: z.enum(["decision", "approval", "briefing", "incident"]).default("decision"),
   locale: SessionLocaleSchema.default("en"),
   initiator: InitiatorSchema,
@@ -71,11 +173,29 @@ export const CreateSessionSchema = z.object({
   routing: z.object({ policy: z.string().default("default") }).default({ policy: "default" }),
   continuation: ContinuationSchema.optional(),
   callback: CallbackSchema.optional(),
+  continuity: ContinuitySchema.optional(),
   urgency: z.enum(["normal", "high", "incident"]).default("normal"),
   estimated_duration_minutes: z.number().positive().optional(),
   expires_at: z.string().datetime().optional(),
   idempotency_key: z.string().optional(),
-});
+  })
+  .superRefine((value, ctx) => {
+    if (!value.continuity) return;
+    if (value.continuity.agent.id !== value.initiator.agent_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["continuity", "agent", "id"],
+        message: "Must match initiator.agent_id",
+      });
+    }
+    if (JSON.stringify(value.continuity).length > 32_768) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["continuity"],
+        message: "Continuity package must be at most 32 KiB",
+      });
+    }
+  });
 
 export type CreateSessionInput = z.infer<typeof CreateSessionSchema>;
 

@@ -81,6 +81,9 @@ function migrate(sqlite: Database.Database): void {
       routing_json TEXT NOT NULL,
       continuation_json TEXT,
       callback_json TEXT,
+      continuity_json TEXT,
+      continuity_trace_json TEXT,
+      continuity_capsule_json TEXT,
       urgency TEXT DEFAULT 'normal',
       estimated_duration_minutes INTEGER,
       expires_at TEXT,
@@ -210,6 +213,15 @@ function migrate(sqlite: Database.Database): void {
   if (!sessionColumns.has("phone_retry_json")) {
     sqlite.exec("ALTER TABLE sessions ADD COLUMN phone_retry_json TEXT");
   }
+  if (!sessionColumns.has("continuity_json")) {
+    sqlite.exec("ALTER TABLE sessions ADD COLUMN continuity_json TEXT");
+  }
+  if (!sessionColumns.has("continuity_trace_json")) {
+    sqlite.exec("ALTER TABLE sessions ADD COLUMN continuity_trace_json TEXT");
+  }
+  if (!sessionColumns.has("continuity_capsule_json")) {
+    sqlite.exec("ALTER TABLE sessions ADD COLUMN continuity_capsule_json TEXT");
+  }
 }
 
 function rowToSession(row: typeof sessions.$inferSelect): ConferSession {
@@ -226,6 +238,11 @@ function rowToSession(row: typeof sessions.$inferSelect): ConferSession {
     routing: JSON.parse(row.routingJson),
     continuation: row.continuationJson ? JSON.parse(row.continuationJson) : undefined,
     callback: row.callbackJson ? JSON.parse(row.callbackJson) : undefined,
+    continuity: row.continuityJson ? JSON.parse(row.continuityJson) : undefined,
+    continuityTrace: row.continuityTraceJson ? JSON.parse(row.continuityTraceJson) : undefined,
+    continuityCapsule: row.continuityCapsuleJson
+      ? JSON.parse(row.continuityCapsuleJson)
+      : undefined,
     urgency: (row.urgency as ConferSession["urgency"]) ?? "normal",
     estimatedDurationMinutes: row.estimatedDurationMinutes ?? undefined,
     expiresAt: row.expiresAt ?? undefined,
@@ -286,6 +303,11 @@ export class SessionStore {
       routingJson: JSON.stringify(session.routing),
       continuationJson: session.continuation ? JSON.stringify(session.continuation) : null,
       callbackJson: session.callback ? JSON.stringify(session.callback) : null,
+      continuityJson: session.continuity ? JSON.stringify(session.continuity) : null,
+      continuityTraceJson: session.continuityTrace ? JSON.stringify(session.continuityTrace) : null,
+      continuityCapsuleJson: session.continuityCapsule
+        ? JSON.stringify(session.continuityCapsule)
+        : null,
       urgency: session.urgency ?? "normal",
       estimatedDurationMinutes: session.estimatedDurationMinutes ?? null,
       expiresAt: session.expiresAt ?? null,
@@ -419,6 +441,19 @@ export class SessionStore {
     }
     if ("phoneRetry" in patch) {
       updates.phoneRetryJson = patch.phoneRetry ? JSON.stringify(patch.phoneRetry) : null;
+    }
+    if ("continuity" in patch) {
+      updates.continuityJson = patch.continuity ? JSON.stringify(patch.continuity) : null;
+    }
+    if ("continuityTrace" in patch) {
+      updates.continuityTraceJson = patch.continuityTrace
+        ? JSON.stringify(patch.continuityTrace)
+        : null;
+    }
+    if ("continuityCapsule" in patch) {
+      updates.continuityCapsuleJson = patch.continuityCapsule
+        ? JSON.stringify(patch.continuityCapsule)
+        : null;
     }
     if (patch.humanConfirmation)
       updates.humanConfirmationJson = JSON.stringify(patch.humanConfirmation);
@@ -844,7 +879,7 @@ export class SessionStore {
     id: string,
     patch: Pick<
       ConferSession,
-      "result" | "summary" | "capturedContext" | "humanConfirmation"
+      "result" | "summary" | "capturedContext" | "continuityCapsule" | "humanConfirmation"
     >,
     webhook?: {
       id: string;
@@ -883,6 +918,16 @@ export class SessionStore {
       this.addEvent(id, "session.result_ready", {
         result: patch.result,
         captured_context: patch.capturedContext ?? emptyCapturedContext(),
+        continuity_capsule: patch.continuityCapsule
+          ? {
+              continuity_version: patch.continuityCapsule.continuityVersion,
+              summary: patch.continuityCapsule.summary,
+              decisions: patch.continuityCapsule.decisions,
+              open_threads: patch.continuityCapsule.openThreads,
+              suggested_memory_updates: patch.continuityCapsule.suggestedMemoryUpdates,
+              context_sources: patch.continuityCapsule.contextSources,
+            }
+          : undefined,
       });
       if (webhook) {
         this.enqueueWebhook(

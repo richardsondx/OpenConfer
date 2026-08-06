@@ -22,6 +22,38 @@ const createBody = {
   },
 };
 
+const continuity = {
+  continuity_version: "1.0",
+  agent: {
+    id: "api-test",
+    name: "Test agent",
+    personality_summary: {
+      identity_statement: "An established collaborator",
+      tone: ["warm", "direct"],
+      speaking_style: ["plain language"],
+      interaction_style: ["builds on context"],
+      values: [],
+      preferred_phrasing: [],
+      disallowed_phrasing: ["Nice to meet you"],
+    },
+  },
+  relationship: { status: "established", first_interaction: false, preferred_name: "Rich" },
+  thread: {
+    topic: "continuity",
+    summary: "We are testing the continuity handoff.",
+    current_goal: "Preserve the active thread.",
+    open_questions: [],
+    decisions_so_far: [],
+    commitments: [],
+  },
+  memory: {
+    provider: "honcho",
+    connection_id: "ref-only",
+    session_strategy: "per_source_conversation",
+    permissions: ["thread:read"],
+  },
+};
+
 function joinToken(joinUrl: string): string {
   return new URLSearchParams(new URL(joinUrl).hash.slice(1)).get("token")!;
 }
@@ -135,6 +167,55 @@ describe.sequential("server API", () => {
       (await app.inject({ method: "POST", url: `/v1/join/${id}/connect`, payload: { token } }))
         .statusCode,
     ).toBe(404);
+  });
+
+  it("persists continuity, redacts it from join responses, and returns a capsule", async () => {
+    const headers = { authorization: "Bearer test-api-token" };
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers,
+      payload: { ...createBody, continuity },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const id = created.json().id as string;
+    const token = joinToken(created.json().join_url);
+
+    const saved = await app.inject({ method: "GET", url: `/v1/sessions/${id}`, headers });
+    expect(saved.json().continuity.agent.name).toBe("Test agent");
+    expect(saved.json().continuity.memory.connection_id).toBe("ref-only");
+    expect(
+      (await app.inject({ method: "GET", url: `/v1/join/${id}`, headers: { "x-join-token": token } })).json()
+        .session.continuity,
+    ).toBeUndefined();
+    expect(store.getEvents(id).some((event) => event.type === "session.continuity_initialized")).toBe(true);
+
+    await app.inject({
+      method: "POST",
+      url: `/v1/join/${id}/connect`,
+      payload: { token },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/v1/join/${id}/active`,
+      payload: { token },
+    });
+    const confirmed = await app.inject({
+      method: "POST",
+      url: `/v1/sessions/${id}/confirm`,
+      headers: { "x-join-token": token },
+      payload: { result: { approved: true }, summary: "Approved" },
+    });
+    expect(confirmed.statusCode).toBe(200);
+    expect(confirmed.json().continuity_capsule).toMatchObject({
+      summary: "Approved",
+      open_threads: [],
+      context_sources: ["personality", "relationship", "thread"],
+    });
+    expect(
+      store.getEvents(id).find((event) => event.type === "session.result_ready")?.payload
+        .continuity_capsule,
+    ).toMatchObject({ continuity_version: "1.0", summary: "Approved" });
   });
 
   it("protects previews and makes voice confirmation revision-safe and idempotent", async () => {
@@ -271,6 +352,7 @@ describe.sequential("server API", () => {
       headers: { authorization: "Bearer test-api-token" },
       payload: {
         ...createBody,
+        continuity,
         callback: { url: "https://example.com/result", secret: "callback-secret-long-enough" },
       },
     });
@@ -297,6 +379,10 @@ describe.sequential("server API", () => {
       additional_instructions: ["Notify support"],
       new_requests: [],
       unresolved_topics: [],
+    });
+    expect(JSON.parse(init?.body as string).continuity_capsule).toMatchObject({
+      continuity_version: "1.0",
+      context_sources: ["personality", "relationship", "thread"],
     });
     expect(headers["X-OpenConfer-Event-Id"]).toMatch(/^evt_/);
     expect(headers["X-OpenConfer-Timestamp"]).toBeTruthy();

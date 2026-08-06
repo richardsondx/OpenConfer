@@ -206,6 +206,8 @@ export async function buildServer() {
       status: session.status,
       created_at: session.createdAt,
       join_url: session.joinUrl,
+      continuity: session.continuity,
+      continuity_trace: session.continuityTrace,
       pending_decision: serializePendingDecision(session),
       phone_retry: serializePhoneRetry(session),
       links: { self: `/v1/sessions/${session.id}` },
@@ -471,6 +473,18 @@ function toApiSession(session: import("@openconfer/core").ConferSession) {
     result: session.result,
     summary: session.summary,
     captured_context: session.capturedContext,
+    continuity: session.continuity,
+    continuity_trace: session.continuityTrace,
+    continuity_capsule: session.continuityCapsule
+      ? {
+          continuity_version: session.continuityCapsule.continuityVersion,
+          summary: session.continuityCapsule.summary,
+          decisions: session.continuityCapsule.decisions,
+          open_threads: session.continuityCapsule.openThreads,
+          suggested_memory_updates: session.continuityCapsule.suggestedMemoryUpdates,
+          context_sources: session.continuityCapsule.contextSources,
+        }
+      : undefined,
     pending_decision: serializePendingDecision(session),
     phone_retry: serializePhoneRetry(session),
     has_callback: Boolean(session.callback?.url),
@@ -512,6 +526,16 @@ function toJoinSession(session: import("@openconfer/core").ConferSession) {
     result: session.result,
     summary: session.summary,
     captured_context: session.capturedContext,
+    continuity_capsule: session.continuityCapsule
+      ? {
+          continuity_version: session.continuityCapsule.continuityVersion,
+          summary: session.continuityCapsule.summary,
+          decisions: session.continuityCapsule.decisions,
+          open_threads: session.continuityCapsule.openThreads,
+          suggested_memory_updates: session.continuityCapsule.suggestedMemoryUpdates,
+          context_sources: session.continuityCapsule.contextSources,
+        }
+      : undefined,
     pending_decision: serializePendingDecision(session),
     phone_retry: serializePhoneRetry(session),
     has_callback: Boolean(session.callback?.url),
@@ -555,6 +579,16 @@ function toResult(session: import("@openconfer/core").ConferSession) {
     summary: session.summary ?? "",
     result: session.result,
     captured_context: session.capturedContext,
+    continuity_capsule: session.continuityCapsule
+      ? {
+          continuity_version: session.continuityCapsule.continuityVersion,
+          summary: session.continuityCapsule.summary,
+          decisions: session.continuityCapsule.decisions,
+          open_threads: session.continuityCapsule.openThreads,
+          suggested_memory_updates: session.continuityCapsule.suggestedMemoryUpdates,
+          context_sources: session.continuityCapsule.contextSources,
+        }
+      : undefined,
     continuation: session.continuation
       ? {
           run_id: session.continuation.runId,

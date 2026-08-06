@@ -106,7 +106,7 @@ async function api(path: string, options: RequestInit = {}): Promise<Record<stri
   return body;
 }
 
-program.name("openconfer").description("OpenConfer — human decision infrastructure for AI agents").version("0.2.1");
+program.name("openconfer").description("OpenConfer — human decision infrastructure for AI agents").version("0.3.0");
 
 program
   .command("init")
@@ -448,7 +448,14 @@ session
       console.error("No result yet");
       process.exit(1);
     }
-    console.log(opts.json ? JSON.stringify(result, null, 2) : JSON.stringify(result.result, null, 2));
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(JSON.stringify(result.result, null, 2));
+      if (result.continuity_capsule) {
+        console.log("Continuity capsule:");
+        console.log(JSON.stringify(result.continuity_capsule, null, 2));
+      }
+    }
   });
 
 session
@@ -546,7 +553,13 @@ async function waitForSession(id: string, json?: boolean): Promise<Record<string
     if (terminal.includes(String(session.status))) {
       if (json) console.log(JSON.stringify(session, null, 2));
       else console.log(`Session ${id}: ${session.status}`);
-      if (session.result) console.log(JSON.stringify(session.result, null, 2));
+      if (session.result) {
+        console.log(JSON.stringify(session.result, null, 2));
+        if (session.continuity_capsule) {
+          console.log("Continuity capsule:");
+          console.log(JSON.stringify(session.continuity_capsule, null, 2));
+        }
+      }
       return session;
     }
     await new Promise((r) => setTimeout(r, 2000));

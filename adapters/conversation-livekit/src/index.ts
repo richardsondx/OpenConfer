@@ -14,6 +14,19 @@ function sessionMetadata(
   session: Parameters<ConversationAdapter["createRoom"]>[0],
   surface: NonNullable<Parameters<ConversationAdapter["createRoom"]>[1]>["surface"] = "browser",
 ): string {
+  const continuity = session.continuity
+    ? {
+        continuityVersion: session.continuity.continuity_version,
+        agent: {
+          id: session.continuity.agent.id,
+          name: session.continuity.agent.name,
+          source: session.continuity.agent.source,
+          personalitySummary: session.continuity.agent.personality_summary,
+        },
+        relationship: session.continuity.relationship,
+        thread: session.continuity.thread,
+      }
+    : undefined;
   return JSON.stringify({
     sessionId: session.id,
     type: session.type,
@@ -23,6 +36,8 @@ function sessionMetadata(
     objective: session.objective,
     brief: session.brief,
     resultSchema: session.resultSchema,
+    continuity,
+    continuityTrace: session.continuityTrace,
     surface,
     pendingDecision: session.pendingDecision
       ? {

@@ -53,6 +53,57 @@ describe("SessionStore", () => {
     });
   });
 
+  it("round-trips continuity packages, traces, and capsules", () => {
+    const item = session();
+    item.continuity = {
+      continuity_version: "1.0",
+      agent: {
+        id: "a",
+        personality_summary: {
+          identity_statement: "A collaborator",
+          tone: [],
+          speaking_style: [],
+          interaction_style: [],
+          values: [],
+          preferred_phrasing: [],
+          disallowed_phrasing: [],
+        },
+      },
+      relationship: { status: "established", first_interaction: false },
+      thread: {
+        summary: "Continue the current thread.",
+        current_goal: "Test persistence.",
+        open_questions: [],
+        decisions_so_far: [],
+        commitments: [],
+      },
+      memory: {
+        connection_id: "ref-1",
+        session_strategy: "per_source_conversation",
+        permissions: ["thread:read"],
+      },
+    };
+    item.continuityTrace = {
+      applied: ["personality", "relationship", "thread"],
+      memory: "not_attempted",
+      degraded: false,
+    };
+    item.continuityCapsule = {
+      continuityVersion: "1.0",
+      summary: "Approved.",
+      decisions: { approved: true },
+      openThreads: ["Follow up"],
+      suggestedMemoryUpdates: [],
+      contextSources: ["personality", "relationship", "thread"],
+    };
+    store.insert(item);
+    expect(store.getById(item.id)).toMatchObject({
+      continuity: { agent: { id: "a" }, memory: { connection_id: "ref-1" } },
+      continuityTrace: { degraded: false },
+      continuityCapsule: { summary: "Approved.", openThreads: ["Follow up"] },
+    });
+  });
+
   it("migrates preview, retry, and attempt storage into an existing database", () => {
     const legacyPath = join(dir, "legacy.db");
     const legacy = new Database(legacyPath);
@@ -82,6 +133,9 @@ describe("SessionStore", () => {
         "captured_context_json",
         "pending_decision_json",
         "phone_retry_json",
+        "continuity_json",
+        "continuity_trace_json",
+        "continuity_capsule_json",
       ]),
     );
     expect(tables.map((table) => table.name)).toEqual(

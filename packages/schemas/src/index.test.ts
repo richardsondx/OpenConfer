@@ -8,6 +8,7 @@ import {
   ConfirmResultSchema,
   ConfigSchema,
   CreateSessionSchema,
+  ContinuitySchema,
   normalizeSpeakingFields,
   OperatorAlertsSchema,
   resolveSpeakingReady,
@@ -19,6 +20,42 @@ const approval = JSON.parse(readFileSync(join(root, "examples/approval-checkpoin
 const standup = JSON.parse(readFileSync(join(root, "examples/daily-standup/session.json"), "utf8"));
 const decision = JSON.parse(readFileSync(join(root, "examples/decision-session/session.json"), "utf8"));
 
+const continuity = {
+  continuity_version: "1.0",
+  agent: {
+    id: "hermes",
+    name: "Hermes",
+    personality_summary: {
+      identity_statement: "An established collaborator.",
+      tone: ["warm", "direct"],
+      speaking_style: ["plain language"],
+      interaction_style: ["builds on context"],
+      values: ["honesty"],
+      preferred_phrasing: ["Let's continue"],
+      disallowed_phrasing: ["Nice to meet you"],
+    },
+  },
+  relationship: {
+    status: "established",
+    first_interaction: false,
+    preferred_name: "Rich",
+  },
+  thread: {
+    summary: "We are designing continuity for voice calls.",
+    current_goal: "Implement the handoff contract.",
+    open_questions: ["How should memory be delegated?"],
+    decisions_so_far: [],
+    commitments: [],
+    last_user_intent: "Implement the plan.",
+  },
+  memory: {
+    provider: "honcho",
+    connection_id: "honcho-main",
+    session_strategy: "per_source_conversation",
+    permissions: ["relationship:read"],
+  },
+};
+
 describe("CreateSessionSchema locale", () => {
   it("defaults to English and canonicalizes an agent-supplied BCP 47 locale", () => {
     expect(CreateSessionSchema.parse(decision).locale).toBe("en");
@@ -29,6 +66,53 @@ describe("CreateSessionSchema locale", () => {
     expect(CreateSessionSchema.safeParse({ ...decision, locale: "not_a_locale" }).success).toBe(
       false,
     );
+  });
+});
+
+describe("continuity package", () => {
+  it("accepts a complete package and keeps memory references non-secret", () => {
+    const parsed = ContinuitySchema.parse(continuity);
+    expect(parsed.relationship.first_interaction).toBe(false);
+    expect(parsed.memory?.connection_id).toBe("honcho-main");
+  });
+
+  it("accepts the package through session creation and binds the agent id", () => {
+    const parsed = CreateSessionSchema.parse({
+      ...decision,
+      initiator: { ...decision.initiator, agent_id: "hermes" },
+      continuity,
+    });
+    expect(parsed.continuity?.agent.id).toBe("hermes");
+  });
+
+  it("rejects mismatched agent ids, unknown credential fields, and oversized packages", () => {
+    expect(
+      CreateSessionSchema.safeParse({
+        ...decision,
+        continuity: { ...continuity, agent: { ...continuity.agent, id: "other-agent" } },
+      }).success,
+    ).toBe(false);
+    expect(
+      ContinuitySchema.safeParse({
+        ...continuity,
+        memory: { ...continuity.memory, api_key: "should-not-be-accepted" },
+      }).success,
+    ).toBe(false);
+    expect(
+      ContinuitySchema.safeParse({
+        ...continuity,
+        relationship: { ...continuity.relationship, status: "new", first_interaction: false },
+      }).success,
+    ).toBe(false);
+    expect(
+      CreateSessionSchema.safeParse({
+        ...decision,
+        continuity: {
+          ...continuity,
+          thread: { ...continuity.thread, summary: "x".repeat(4_001) },
+        },
+      }).success,
+    ).toBe(false);
   });
 });
 

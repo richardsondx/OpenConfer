@@ -1,12 +1,15 @@
-import type { CapturedContext, CreateSessionInput } from "@openconfer/schemas";
+import type { CapturedContext, CreateSessionInput, ContinuityPackage } from "@openconfer/schemas";
 
-export type { CapturedContext } from "@openconfer/schemas";
+export type { CapturedContext, ContinuityPackage } from "@openconfer/schemas";
 
 export interface OpenConferSessionResponse extends Record<string, unknown> {
   id: string;
   status: string;
   result?: Record<string, unknown>;
   captured_context?: CapturedContext;
+  continuity?: ContinuityPackage;
+  continuity_trace?: ContinuityTraceResponse;
+  continuity_capsule?: ContinuityCapsuleResponse;
 }
 
 export interface PendingDecisionResponse {
@@ -15,6 +18,21 @@ export interface PendingDecisionResponse {
   captured_context?: CapturedContext;
   revision: number;
   previewed_at: string;
+}
+
+export interface ContinuityCapsuleResponse {
+  continuity_version: "1.0";
+  summary: string;
+  decisions: Record<string, unknown>;
+  open_threads: string[];
+  suggested_memory_updates: [];
+  context_sources: string[];
+}
+
+export interface ContinuityTraceResponse {
+  applied: string[];
+  memory: "not_attempted" | "unavailable";
+  degraded: boolean;
 }
 
 export interface OpenConferClientOptions {
@@ -40,7 +58,7 @@ export class OpenConferClient {
   }
 
   createSession(input: CreateSessionInput) {
-    return this.request<{ id: string; status: string; join_url?: string }>("/v1/sessions", {
+    return this.request<OpenConferSessionResponse>("/v1/sessions", {
       method: "POST",
       body: JSON.stringify(input),
     });

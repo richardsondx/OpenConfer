@@ -112,6 +112,50 @@ set. Set `OPENCONFER_PUBLIC_URL` when the browser is not available at
 4. Result delivered via webhook
 5. Agent acknowledges and resumes
 
+### Personality continuity
+
+Agents can attach an optional `continuity` package to `POST /v1/sessions` so a
+voice call continues the source agent's personality, established relationship,
+and active thread instead of sounding like a first meeting. The package is
+validated, persisted, and included in the idempotency fingerprint. Provider
+credentials are never accepted in it.
+
+```json
+{
+  "initiator": { "agent_id": "hermes" },
+  "continuity": {
+    "continuity_version": "1.0",
+    "agent": {
+      "id": "hermes",
+      "personality_summary": {
+        "identity_statement": "A warm, direct collaborator",
+        "tone": ["warm", "direct"],
+        "speaking_style": ["plain language"],
+        "interaction_style": ["builds on context"],
+        "values": [],
+        "preferred_phrasing": [],
+        "disallowed_phrasing": ["Nice to meet you"]
+      }
+    },
+    "relationship": {
+      "status": "established",
+      "first_interaction": false
+    },
+    "thread": {
+      "summary": "We are preparing the release.",
+      "current_goal": "Confirm the rollout plan.",
+      "open_questions": [],
+      "decisions_so_far": [],
+      "commitments": []
+    }
+  }
+}
+```
+
+Remote memory retrieval and provider settings are a later milestone. This
+release accepts only non-secret memory connection references and reports
+provider retrieval as `not_attempted`.
+
 Run the signed-webhook example from a source checkout with local callbacks
 explicitly enabled:
 
